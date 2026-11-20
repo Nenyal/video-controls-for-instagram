@@ -17,7 +17,8 @@ instagram.com: Reels, Stories, feed posts and post modals.
   - **Best quality, separate files**: the same two streams as separate files.
   - **Current frame**: a PNG of the frame on screen.
 
-  Best-quality streams are often VP9, which plays in Chrome, Firefox and VLC but not in QuickTime.
+  Best-quality streams are often VP9, so those files may only open in a web browser; the menu says so
+  when that's the case.
   Post and story images get a download button on hover that saves the largest stored size.
   Carousels download the slide you're looking at.
 - Frame stepping and picture-in-picture

@@ -810,10 +810,10 @@ export class VideoController {
     }
     if (dash) {
       const quality = `${Math.min(dash.video.width, dash.video.height)}p`;
-      // VP9/AV1 in MP4 plays in browsers and VLC but not in QuickTime.
-      const codec = /^(vp09|av01)/.test(dash.video.codecs) ? ` · ${dash.video.codecs.startsWith('av01') ? 'AV1' : 'VP9'}, not QuickTime` : '';
-      add('Best quality, merged', `${quality}${codec} · takes a moment`, (setNote) => this.downloadMerged(dash, quality, setNote));
-      add('Best quality, separate files', `${quality} video + audio track${codec}`, async () => {
+      // VP9/AV1 streams play in web browsers, but many desktop and phone players can't open them.
+      const browserOnly = /^(vp09|av01)/.test(dash.video.codecs) ? ' · opens in browsers only' : '';
+      add('Best quality, merged', `${quality}${browserOnly} · takes a moment`, (setNote) => this.downloadMerged(dash, quality, setNote));
+      add('Best quality, separate files', `${quality} video + audio track${browserOnly}`, async () => {
         const videoOk = await startDownload({ url: dash.video.url, filename: `${dash.baseName}_${quality}_video.mp4` });
         const audioOk = await startDownload({ url: dash.audio.url, filename: `${dash.baseName}_audio.mp4` });
         return videoOk && audioOk;
