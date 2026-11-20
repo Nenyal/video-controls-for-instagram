@@ -6,6 +6,8 @@
 // original upload. When the API isn't available (e.g. logged out), the JSON embedded in the page is
 // searched for the same data.
 
+import { debug } from './debug';
+
 const APP_ID = '936619743392459';
 const SHORTCODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 const POST_HREF = /\/(?:p|reels?)\/([\w-]+)/;
@@ -119,29 +121,101 @@ export async function resolveMedia(ref: MediaRef, hint: MediaHint = {}): Promise
 async function apiJson(path: string): Promise<unknown> {
   try {
     const res = await fetch(path, { credentials: 'include', headers: { 'X-IG-App-ID': APP_ID } });
-    if (res.ok && res.headers.get('content-type')?.includes('json')) return await res.json();
-  } catch {
-    // Network error: treat as unavailable.
+    const type = res.headers.get('content-type') ?? '';
+    debug('api', path, res.status, type.split(';')[0]);
+    if (res.ok && type.includes('json')) return await res.json();
+  } catch (error) {
+    debug('api', path, 'failed', error);
   }
   return null;
 }
 
-/** Loads the whole story reel (a user's stories or a highlight) and picks the item on screen. */
+/**
+ * The story item on screen. A story opened directly comes with its reel embedded in the page, so
+ * that's checked first; otherwise the reel is requested by id (the user's id is also in the page).
+ */
 async function storyItem(ref: MediaRef, hint: MediaHint): Promise<MediaItem | null> {
   const { username, highlight } = ref.story!;
+  const embedded = embeddedMedia();
+  const own = embedded.filter((m) => m.owner === username);
+  const fromPage = matchItem((own.length ? own : embedded).map((m) => withUser(m.item, m.owner)), ref, hint);
+  debug('story in page data', { username, embedded: embedded.length, own: own.length, hint, matched: fromPage && String(fromPage.pk) });
+  if (fromPage) return fromPage;
+
   let reelId = highlight ? `highlight:${highlight}` : null;
-  if (!reelId && username) {
-    const profile = (await apiJson(`/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`)) as
-      | { data?: { user?: { id?: string } } }
-      | null;
-    reelId = profile?.data?.user?.id ?? null;
-  }
+  if (!reelId && username) reelId = embeddedUserId(username) ?? (await profileUserId(username));
   if (!reelId) return null;
   const data = (await apiJson(`/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(reelId)}`)) as {
     reels?: Record<string, { items?: MediaItem[] }>;
     reels_media?: { items?: MediaItem[] }[];
   } | null;
-  return matchItem(data?.reels?.[reelId]?.items ?? data?.reels_media?.[0]?.items ?? [], ref, hint);
+  const items = (data?.reels?.[reelId]?.items ?? data?.reels_media?.[0]?.items ?? []).map((i) => withUser(i, username));
+  const match = matchItem(items, ref, hint);
+  debug('story reel', {
+    reelId,
+    responseKeys: data && Object.keys(data),
+    items: items.map((i) => ({ pk: String(i.pk), duration: i.video_duration, video: !!i.video_versions?.length })),
+    hint,
+    matched: match && String(match.pk),
+  });
+  return match;
+}
+
+/** Story items in a reel carry no user of their own; give them the reel's, for file names. */
+function withUser(item: MediaItem, username: string | undefined): MediaItem {
+  return item.user?.username || !username ? item : { ...item, user: { username } };
+}
+
+async function profileUserId(username: string): Promise<string | null> {
+  const profile = (await apiJson(`/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`)) as
+    | { data?: { user?: { id?: string } } }
+    | null;
+  return profile?.data?.user?.id ?? null;
+}
+
+/** Parsed JSON blobs Instagram embeds in the page (what it rendered the first view from). */
+function embeddedJson(needle: string): unknown[] {
+  const roots: unknown[] = [];
+  for (const script of document.querySelectorAll('script[type="application/json"]')) {
+    const text = script.textContent ?? '';
+    if (!text.includes(needle)) continue;
+    try {
+      roots.push(JSON.parse(text));
+    } catch {
+      // Not JSON we understand.
+    }
+  }
+  return roots;
+}
+
+/** Every media item in the embedded data, with the username of the post/reel it belongs to. */
+function embeddedMedia(): { item: MediaItem; owner?: string }[] {
+  const found: { item: MediaItem; owner?: string }[] = [];
+  const stack: { node: unknown; owner?: string }[] = embeddedJson('_versions').map((node) => ({ node }));
+  while (stack.length) {
+    const { node, owner: inherited } = stack.pop()!;
+    if (!node || typeof node !== 'object') continue;
+    const item = node as MediaItem & { owner?: { username?: string } };
+    // Story items often carry no user of their own; their reel does.
+    const owner = item.user?.username ?? item.owner?.username ?? inherited;
+    if (item.video_versions?.length || item.image_versions2?.candidates?.length) found.push({ item, owner });
+    for (const value of Object.values(node)) stack.push({ node: value, owner });
+  }
+  return found;
+}
+
+/** A user's numeric id, from any user object in the embedded data. */
+function embeddedUserId(username: string): string | null {
+  const stack = embeddedJson(`"${username}"`);
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    const user = node as { username?: string; pk?: string | number; id?: string | number; pk_id?: string };
+    const id = user.pk ?? user.pk_id ?? user.id;
+    if (user.username === username && id !== undefined && /^\d+$/.test(String(id))) return String(id);
+    stack.push(...Object.values(node));
+  }
+  return null;
 }
 
 /** The reel item on screen: by id when known, else by image file name or video length. */

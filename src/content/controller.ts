@@ -4,6 +4,7 @@ import {
   bestDash, bestVideo, fetchBytes, findMediaRef, resolveMedia, saveBlob, startDownload, type MediaItem,
 } from './media';
 import { mergeTracks } from './mux';
+import { debug } from './debug';
 import { formatSpeed, formatTime } from '../shared/format';
 import { SPEEDS, type ReelsEnd, type Settings } from '../shared/settings';
 
@@ -40,18 +41,6 @@ const ISOLATED_EVENTS = [
 // Matched against aria-labels and SVG titles of Instagram's buttons, in a few common languages.
 const MUTE_LABEL = /audio|sound|mute|volume|\bses|\bton\b|\bson\b|sonido|áudio|suono|звук/i;
 const NEXT_LABEL = /\bnext\b|sonraki|weiter|suivant|siguiente|avanti|próximo|далее/i;
-
-const DEBUG = (() => {
-  try {
-    return localStorage.getItem('ivc-debug') === '1';
-  } catch {
-    return false;
-  }
-})();
-
-function debug(...args: unknown[]): void {
-  if (DEBUG) console.debug('[ivc]', ...args);
-}
 
 /** Last trusted click on Instagram's own UI (not our overlay). */
 const pageClick = { time: -Infinity, target: null as Element | null };
@@ -768,6 +757,7 @@ export class VideoController {
     // Stories opened directly have no item id in the URL; a new story item is a new source (loadstart clears this).
     const key = ref.pk ?? ref.code ?? location.pathname;
     if (this.mediaCache?.key !== key) {
+      debug('media lookup', { url: location.pathname, ref, duration: this.video.duration });
       const item = resolveMedia(ref, { duration: this.video.duration }).then((found) => {
         if (!found && this.mediaCache?.item === item) this.mediaCache = null; // retry next time
         return found;
