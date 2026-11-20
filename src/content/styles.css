@@ -71,9 +71,17 @@
   filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.4));
 }
 
-.btn.loop:not(.on) svg,
-.btn.pip:not(.on) svg {
+.btn.toggle:not(.on) svg {
   opacity: 0.55;
+}
+
+/* Auto-next only makes sense on reels pages. */
+.btn.next {
+  display: none;
+}
+
+.wrap.reels .btn.next {
+  display: inline-flex;
 }
 
 .btn.on::after {
@@ -86,8 +94,7 @@
   transform: translateY(13px);
 }
 
-.btn.loop,
-.btn.pip {
+.btn.toggle {
   position: relative;
 }
 
@@ -96,6 +103,23 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   text-shadow: 0 1px 2px rgb(0 0 0 / 0.5);
+}
+
+/* ---------- fullscreen click catcher ---------- */
+
+.catcher {
+  position: absolute;
+  inset: 0;
+  display: none;
+  pointer-events: auto;
+}
+
+.wrap.fs .catcher {
+  display: block;
+}
+
+.wrap.fs.idle .catcher {
+  cursor: none;
 }
 
 /* ---------- progress ---------- */

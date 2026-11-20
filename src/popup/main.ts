@@ -8,6 +8,7 @@ const speed = $<HTMLSelectElement>('speed');
 const seekStep = $<HTMLSelectElement>('seekStep');
 const progressLine = $<HTMLInputElement>('progressLine');
 const shortcuts = $<HTMLInputElement>('shortcuts');
+const autoNext = $<HTMLInputElement>('autoNext');
 const options = $<HTMLElement>('options');
 
 for (const s of SPEEDS) speed.add(new Option(formatSpeed(s), String(s)));
@@ -18,6 +19,7 @@ function render(settings: Settings): void {
   seekStep.value = String(settings.seekStep);
   progressLine.checked = settings.progressLine;
   shortcuts.checked = settings.shortcuts;
+  autoNext.checked = settings.autoNext;
   options.classList.toggle('disabled', !settings.enabled);
 }
 
@@ -38,3 +40,4 @@ bind(speed, () => ({ speed: Number(speed.value) }));
 bind(seekStep, () => ({ seekStep: Number(seekStep.value) }));
 bind(progressLine, () => ({ progressLine: progressLine.checked }));
 bind(shortcuts, () => ({ shortcuts: shortcuts.checked }));
+bind(autoNext, () => ({ autoNext: autoNext.checked }));

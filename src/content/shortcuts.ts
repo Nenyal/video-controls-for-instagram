@@ -17,7 +17,8 @@ export function installShortcuts(
 ): void {
   window.addEventListener('keydown', (e) => {
     const settings = getSettings();
-    if (!settings.shortcuts || e.ctrlKey || e.metaKey || e.altKey || e.isComposing || isTyping(e)) return;
+    // Untrusted events include our own synthetic arrow keys used to navigate to the next reel.
+    if (!e.isTrusted || !settings.shortcuts || e.ctrlKey || e.metaKey || e.altKey || e.isComposing || isTyping(e)) return;
     const active = getActive();
     if (!active) return;
     const c = active.controller;
@@ -70,6 +71,10 @@ export function installShortcuts(
       case 'r':
       case 'R':
         c.toggleLoop();
+        break;
+      case 'n':
+      case 'N':
+        c.toggleAutoNext();
         break;
       case ',':
         c.stepFrame(-1);

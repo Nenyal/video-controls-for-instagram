@@ -15,12 +15,46 @@ const MIN_WIDTH = 140;
 const MIN_HEIGHT = 100;
 const OCCLUSION_INTERVAL = 250;
 const BAR_HEIGHT = 74;
+/** How long after a click on Instagram's UI a mute change still counts as the user's doing. */
+const USER_CLICK_WINDOW = 600;
+/** Auto-next triggers this close to the end, before Instagram gets a chance to loop. */
+const END_MARGIN = 0.25;
 
 // Events that must not reach Instagram's handlers (play/pause toggles, story taps, outside-click closers).
 const ISOLATED_EVENTS = [
   'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick',
   'touchstart', 'touchend', 'contextmenu',
 ] as const;
+
+// Matched against aria-labels and SVG titles of Instagram's buttons, in a few common languages.
+const MUTE_LABEL = /audio|sound|mute|volume|\bses|\bton\b|\bson\b|sonido|áudio|suono|звук/i;
+const NEXT_LABEL = /\bnext\b|sonraki|weiter|suivant|siguiente|avanti|próximo|далее/i;
+
+const DEBUG = (() => {
+  try {
+    return localStorage.getItem('ivc-debug') === '1';
+  } catch {
+    return false;
+  }
+})();
+
+function debug(...args: unknown[]): void {
+  if (DEBUG) console.debug('[ivc]', ...args);
+}
+
+/** Last trusted click on Instagram's own UI (not our overlay). */
+const pageClick = { time: -Infinity, target: null as Element | null };
+window.addEventListener('click', (e) => {
+  const target = e.composedPath()[0];
+  // Clicks inside our closed shadow root are retargeted to the host element.
+  if (!e.isTrusted || !(target instanceof Element) || target.localName === HOST_TAG) return;
+  pageClick.time = performance.now();
+  pageClick.target = target;
+}, { capture: true, passive: true });
+
+export function isReelsPage(): boolean {
+  return /^\/reels?\//.test(location.pathname);
+}
 
 export class VideoController {
   readonly host: HTMLElement;
@@ -37,7 +71,6 @@ export class VideoController {
   private barHovered = false;
   private scrubbing = false;
   private scrubFraction = 0;
-  private scrubWasPlaying = false;
   private draggingVolume = false;
 
   private frameDuration = 1 / 30;
@@ -46,11 +79,25 @@ export class VideoController {
   private fsTarget: HTMLElement | null = null;
   private fsSaved = { objectFit: '', background: '' };
 
+  /** Mute state the user chose with our controls; Instagram is not allowed to change it behind our back. */
+  private wantMuted: boolean | null = null;
+  private lastMuted: boolean;
+  private igMuteButton: WeakRef<HTMLElement> | null = null;
+
+  /** Loop state the user chose with our controls, enforced over Instagram's own looping. */
+  private loopOverride: boolean | null = null;
+  private lastTime = 0;
+  private lastOwnSeek = -Infinity;
+  private lastOwnPlay = -Infinity;
+  private endedAt = -Infinity;
+  private advanced = false;
+
   // Cached render state so per-frame updates only touch the DOM when something changed.
   private lastTimeText = '';
   private lastPaused: boolean | null = null;
 
   constructor(readonly video: HTMLVideoElement, private readonly ctx: ControllerHost) {
+    this.lastMuted = video.muted;
     this.host = document.createElement(HOST_TAG);
     this.host.style.cssText =
       'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483000;pointer-events:none;display:none;contain:layout style;';
@@ -80,7 +127,7 @@ export class VideoController {
 
   setIntersecting(value: boolean): void {
     this.intersecting = value;
-    if (!value) this.setShown(false);
+    if (!value) this.setShown(false, 'offscreen');
   }
 
   applySettings(patch: Partial<Settings>): void {
@@ -89,6 +136,7 @@ export class VideoController {
       this.video.volume = patch.volume;
     }
     if (patch.progressLine !== undefined) this.ui.wrap.classList.toggle('show-line', patch.progressLine);
+    if (patch.autoNext !== undefined) this.ui.nextBtn.classList.toggle('on', patch.autoNext);
     this.renderSpeed();
   }
 
@@ -96,6 +144,7 @@ export class VideoController {
 
   frame(now: number): void {
     if (!this.intersecting) return;
+    this.checkEnd();
     const r = this.video.getBoundingClientRect();
     const isFs = this.isFullscreen;
     // Clamp to the viewport so the bar sits at the visible bottom of tall or partly scrolled videos.
@@ -103,16 +152,19 @@ export class VideoController {
     const bottom = Math.min(r.bottom, window.innerHeight);
     const visibleHeight = bottom - top;
 
-    let ok = r.width >= MIN_WIDTH && r.height >= MIN_HEIGHT && visibleHeight >= Math.min(MIN_HEIGHT, r.height);
-    if (ok && !isFs) {
-      if (now - this.lastOcclusionCheck > OCCLUSION_INTERVAL) {
-        this.lastOcclusionCheck = now;
-        this.occluded = this.checkOccluded(r, bottom);
-      }
-      ok = !this.occluded;
+    if (r.width < MIN_WIDTH || r.height < MIN_HEIGHT || visibleHeight < Math.min(MIN_HEIGHT, r.height)) {
+      this.setShown(false, 'too small');
+      return;
     }
-    this.setShown(ok);
-    if (!ok) return;
+    if (!isFs && now - this.lastOcclusionCheck > OCCLUSION_INTERVAL) {
+      this.lastOcclusionCheck = now;
+      this.occluded = this.checkOccluded(r, bottom);
+    }
+    if (!isFs && this.occluded) {
+      this.setShown(false, 'covered');
+      return;
+    }
+    this.setShown(true, 'visible');
 
     this.rect = r;
     const s = this.host.style;
@@ -127,11 +179,12 @@ export class VideoController {
       this.scrubbing || this.draggingVolume || this.barHovered || menuOpen ||
       this.video.paused || now - this.lastActivity < HIDE_DELAY;
     this.ui.wrap.classList.toggle('idle', !active);
+    this.ui.wrap.classList.toggle('reels', isReelsPage());
 
     this.renderProgress();
     this.renderTime();
     this.renderPlayState();
-    this.renderLoop(); // Instagram may flip video.loop itself
+    this.renderLoop();
   }
 
   get isShown(): boolean {
@@ -163,11 +216,15 @@ export class VideoController {
   // ---------- actions (used by UI and keyboard shortcuts) ----------
 
   togglePlay(): void {
-    if (this.video.paused || this.video.ended) {
-      this.video.play().catch(() => {});
+    const { video } = this;
+    if (video.paused || video.ended) {
+      // Stopped at the end because loop is off: start over.
+      if (Number.isFinite(video.duration) && video.currentTime >= video.duration - 0.1) this.seekTo(0);
+      this.lastOwnPlay = performance.now();
+      video.play().catch(() => {});
       this.flash('▶');
     } else {
-      this.video.pause();
+      video.pause();
       this.flash('❚❚');
     }
   }
@@ -175,6 +232,7 @@ export class VideoController {
   seekTo(seconds: number): void {
     const d = this.video.duration;
     if (!Number.isFinite(d)) return;
+    this.lastOwnSeek = performance.now();
     this.video.currentTime = Math.min(Math.max(seconds, 0), Math.max(d - 0.05, 0));
   }
 
@@ -205,7 +263,7 @@ export class VideoController {
   }
 
   toggleMute(): void {
-    this.video.muted = !this.video.muted;
+    this.setMuted(!this.video.muted);
     if (!this.video.muted && this.video.volume === 0) this.setVolume(0.5);
     this.flash(this.video.muted ? 'Muted' : `Volume ${Math.round(this.video.volume * 100)}%`);
   }
@@ -213,7 +271,7 @@ export class VideoController {
   setVolume(volume: number): void {
     const v = Math.min(Math.max(volume, 0), 1);
     this.video.volume = v;
-    if (v > 0) this.video.muted = false;
+    if (v > 0 && this.video.muted) this.setMuted(false);
     this.ctx.update({ volume: v });
   }
 
@@ -224,9 +282,16 @@ export class VideoController {
   }
 
   toggleLoop(): void {
-    this.video.loop = !this.video.loop;
+    this.loopOverride = !this.loops;
+    this.video.loop = this.loopOverride;
     this.renderLoop();
-    this.flash(this.video.loop ? 'Loop on' : 'Loop off');
+    this.flash(this.loopOverride ? 'Loop on' : 'Loop off');
+  }
+
+  toggleAutoNext(): void {
+    const autoNext = !this.ctx.settings.autoNext;
+    this.ctx.update({ autoNext });
+    this.flash(autoNext ? 'Auto-next on' : 'Auto-next off');
   }
 
   stepFrame(direction: 1 | -1): void {
@@ -267,26 +332,38 @@ export class VideoController {
 
   // ---------- internals ----------
 
-  private setShown(value: boolean): void {
+  private get loops(): boolean {
+    return this.loopOverride ?? this.video.loop;
+  }
+
+  private setShown(value: boolean, reason: string): void {
     if (this.shown === value) return;
     this.shown = value;
     this.host.style.display = value ? 'block' : 'none';
     if (!value) this.closeMenu();
+    debug(value ? 'show' : 'hide', reason, this.video);
   }
 
   /**
-   * True when something unrelated to this video (a modal, fixed nav bar, menu) covers the spot
-   * where our bar would be. Anything inside the video's own "media box" (Instagram's
-   * click/tap overlays) doesn't count.
+   * True when a separate layer (a modal, fixed nav bar, menu) covers the spot where our bar would be.
+   * Instagram's own overlays on the video (tap zones, captions, story reply bar) share an ancestor
+   * with the video before reaching any fixed layer or dialog, so they don't count.
    */
   private checkOccluded(r: DOMRect, visibleBottom: number): boolean {
     const x = r.left + r.width / 2;
     const y = visibleBottom - 12;
     if (x < 0 || x >= window.innerWidth || y < 0 || y >= window.innerHeight) return false;
     const hit = document.elementsFromPoint(x, y).find((el) => el.localName !== HOST_TAG);
-    if (!hit) return false;
-    if (hit.contains(this.video)) return false;
-    return !mediaBox(this.video, r).contains(hit);
+    for (let el = hit ?? null; el && el !== document.body; el = el.parentElement) {
+      if (el.contains(this.video)) return false;
+      if (el.getAttribute('role') === 'dialog' || el.localName === 'dialog') return true;
+      const { position } = getComputedStyle(el);
+      if (position === 'fixed' || position === 'sticky') {
+        debug('covered by', el);
+        return true;
+      }
+    }
+    return false;
   }
 
   private bindVideo(): void {
@@ -296,8 +373,24 @@ export class VideoController {
     for (const type of ['loadstart', 'loadedmetadata', 'play', 'ratechange'] as const) {
       video.addEventListener(type, () => this.enforceSpeed(), opts);
     }
+    video.addEventListener('loadstart', () => {
+      // New media: per-video choices start fresh.
+      this.loopOverride = null;
+      this.advanced = false;
+      this.lastTime = 0;
+    }, opts);
     video.addEventListener('loadedmetadata', () => this.trackFrameRate(), opts);
-    video.addEventListener('volumechange', () => this.renderVolume(), opts);
+    video.addEventListener('volumechange', () => this.onVolumeChange(), opts);
+    video.addEventListener('timeupdate', () => this.checkEnd(), opts);
+    video.addEventListener('ended', () => {
+      this.endedAt = performance.now();
+      if (this.autoNextActive()) this.advance();
+    }, opts);
+    video.addEventListener('play', () => {
+      // Instagram restarts reels itself after `ended`; respect "loop off".
+      const restartedByInstagram = performance.now() - this.endedAt < 500 && performance.now() - this.lastOwnPlay > 500;
+      if (this.loopOverride === false && restartedByInstagram) this.stopAtEnd();
+    }, opts);
     video.addEventListener('enterpictureinpicture', () => this.ui.pipBtn.classList.add('on'), opts);
     video.addEventListener('leavepictureinpicture', () => this.ui.pipBtn.classList.remove('on'), opts);
     document.addEventListener('fullscreenchange', () => this.onFullscreenChange(), opts);
@@ -307,11 +400,12 @@ export class VideoController {
     const { ui } = this;
     const opts = { signal: this.ac.signal };
 
-    for (const type of ISOLATED_EVENTS) {
-      ui.bar.addEventListener(type, (e) => e.stopPropagation(), opts);
+    for (const target of [ui.bar, ui.catcher]) {
+      for (const type of ISOLATED_EVENTS) target.addEventListener(type, (e) => e.stopPropagation(), opts);
+      // Keep focus out of our buttons so Space keeps working as a shortcut instead of "pressing" them.
+      target.addEventListener('mousedown', (e) => e.preventDefault(), opts);
     }
-    // Keep focus out of our buttons so Space keeps working as a shortcut instead of "pressing" them.
-    ui.bar.addEventListener('mousedown', (e) => e.preventDefault(), opts);
+    ui.catcher.addEventListener('click', () => this.togglePlay(), opts);
     ui.bar.addEventListener('pointerenter', () => (this.barHovered = true), opts);
     ui.bar.addEventListener('pointerleave', () => (this.barHovered = false), opts);
     ui.bar.addEventListener('wheel', (e) => this.onWheel(e), { ...opts, passive: false });
@@ -319,6 +413,7 @@ export class VideoController {
     ui.playBtn.addEventListener('click', () => this.togglePlay(), opts);
     ui.muteBtn.addEventListener('click', () => this.toggleMute(), opts);
     ui.loopBtn.addEventListener('click', () => this.toggleLoop(), opts);
+    ui.nextBtn.addEventListener('click', () => this.toggleAutoNext(), opts);
     ui.pipBtn.addEventListener('click', () => void this.togglePip(), opts);
     ui.fsBtn.addEventListener('click', () => void this.toggleFullscreen(), opts);
 
@@ -350,12 +445,11 @@ export class VideoController {
       return Math.min(Math.max((clientX - r.left) / r.width, 0), 1);
     };
 
+    // Seek without pausing: Instagram reacts to pause/play events (e.g. re-applying its own mute state).
     progress.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || !Number.isFinite(this.video.duration)) return;
       progress.setPointerCapture(e.pointerId);
       this.scrubbing = true;
-      this.scrubWasPlaying = !this.video.paused;
-      this.video.pause();
       progress.classList.add('scrubbing');
       this.scrubFraction = fractionAt(e.clientX);
       this.seekTo(this.scrubFraction * this.video.duration);
@@ -371,10 +465,8 @@ export class VideoController {
     }, opts);
 
     const end = () => {
-      if (!this.scrubbing) return;
       this.scrubbing = false;
       progress.classList.remove('scrubbing');
-      if (this.scrubWasPlaying) this.video.play().catch(() => {});
     };
     progress.addEventListener('pointerup', end, opts);
     progress.addEventListener('pointercancel', end, opts);
@@ -412,8 +504,116 @@ export class VideoController {
       return;
     }
     // Our overlay lives outside Instagram's scroll containers, so forward the scroll to them.
-    scrollParent(this.video).scrollBy({ left: e.deltaX, top: e.deltaY });
+    (findScroller(this.video) ?? document.scrollingElement)?.scrollBy({ left: e.deltaX, top: e.deltaY });
   }
+
+  // ---------- mute: kept in sync with Instagram's own mute button ----------
+
+  private setMuted(muted: boolean): void {
+    this.wantMuted = muted;
+    if (this.video.muted === muted) return;
+    // Prefer Instagram's own button so its icon and remembered mute state follow along.
+    const button = this.findInstagramMuteButton();
+    if (button) {
+      debug('clicking Instagram mute button', button);
+      button.click();
+    }
+    if (this.video.muted !== muted) this.video.muted = muted;
+  }
+
+  private onVolumeChange(): void {
+    const { video } = this;
+    const changed = video.muted !== this.lastMuted;
+    const byUser = performance.now() - pageClick.time < USER_CLICK_WINDOW;
+    if (changed && byUser) this.learnMuteButton();
+    if (this.wantMuted !== null && video.muted !== this.wantMuted) {
+      if (byUser) {
+        this.wantMuted = video.muted; // the user used Instagram's button: follow it
+      } else {
+        debug('Instagram changed mute on its own; restoring', this.wantMuted);
+        video.muted = this.wantMuted;
+        return;
+      }
+    }
+    this.lastMuted = video.muted;
+    this.renderVolume();
+  }
+
+  /** Remembers which Instagram element toggled mute when the user clicked it. */
+  private learnMuteButton(): void {
+    const target = pageClick.target;
+    const button = target?.closest<HTMLElement>('button, [role="button"]') ?? (target as HTMLElement | null);
+    if (button && this.muteSearchScope()?.contains(button)) this.igMuteButton = new WeakRef(button);
+  }
+
+  private findInstagramMuteButton(): HTMLElement | null {
+    const learned = this.igMuteButton?.deref();
+    if (learned?.isConnected) return learned;
+    for (let el = this.video.parentElement, depth = 0; el && el !== document.body && depth < 10; el = el.parentElement, depth++) {
+      if (el.querySelectorAll('video').length > 1) break;
+      for (const button of el.querySelectorAll<HTMLElement>('button, [role="button"]')) {
+        if (labelsOf(button).some((l) => MUTE_LABEL.test(l))) return button;
+      }
+    }
+    return null;
+  }
+
+  /** The largest ancestor of the video that contains no other video. */
+  private muteSearchScope(): Element | null {
+    let scope: Element | null = null;
+    for (let el = this.video.parentElement, depth = 0; el && el !== document.body && depth < 10; el = el.parentElement, depth++) {
+      if (el.querySelectorAll('video').length > 1) break;
+      scope = el;
+    }
+    return scope;
+  }
+
+  // ---------- end of video: loop off and auto-next ----------
+
+  private autoNextActive(): boolean {
+    return this.ctx.settings.autoNext && isReelsPage() && !this.isFullscreen;
+  }
+
+  private checkEnd(): void {
+    const { video } = this;
+    if (this.loopOverride !== null && video.loop !== this.loopOverride) video.loop = this.loopOverride;
+    const d = video.duration;
+    const t = video.currentTime;
+    const prev = this.lastTime;
+    this.lastTime = t;
+    if (!Number.isFinite(d) || d < 1 || this.scrubbing || video.paused) return;
+    if (t < d - 1) this.advanced = false;
+    // Instagram may restart the video between our checks; catch the jump from the end back to the start.
+    const wrapped = prev > d - 1 && t < 1 && performance.now() - this.lastOwnSeek > 400;
+    if (this.autoNextActive() && (t >= d - END_MARGIN || wrapped)) this.advance();
+    else if (this.loopOverride === false && wrapped) this.stopAtEnd();
+  }
+
+  private stopAtEnd(): void {
+    debug('loop off: stopping at end');
+    this.video.pause();
+    this.seekTo(this.video.duration);
+  }
+
+  private advance(): void {
+    if (this.advanced) return;
+    this.advanced = true;
+    debug('auto-next');
+    this.video.pause();
+    this.flash('Next ▸');
+    const scroller = findScroller(this.video);
+    if (!scroller) {
+      goNext(this.video);
+      return;
+    }
+    const before = scroller.scrollTop;
+    scroller.scrollBy({ top: snapItemHeight(this.video), behavior: 'smooth' });
+    setTimeout(() => {
+      if (Math.abs(scroller.scrollTop - before) < 2) goNext(this.video);
+    }, 600);
+  }
+
+  // ---------- fullscreen ----------
 
   private onFullscreenChange(): void {
     const target = this.fsTarget;
@@ -424,11 +624,13 @@ export class VideoController {
       this.video.style.objectFit = 'contain';
       target.style.background = '#000';
       target.append(this.host);
+      this.ui.wrap.classList.add('fs');
       setIcon(this.ui.fsBtn, 'fullscreenExit');
     } else {
       this.restoreFullscreenStyles();
       document.body.append(this.host);
       this.fsTarget = null;
+      this.ui.wrap.classList.remove('fs');
       setIcon(this.ui.fsBtn, 'fullscreen');
     }
     this.wake();
@@ -439,6 +641,8 @@ export class VideoController {
     this.video.style.objectFit = this.fsSaved.objectFit;
     this.fsTarget.style.background = this.fsSaved.background;
   }
+
+  // ---------- misc ----------
 
   private enforceSpeed(): void {
     const speed = this.ctx.settings.speed;
@@ -548,29 +752,51 @@ export class VideoController {
   }
 
   private renderLoop(): void {
-    this.ui.loopBtn.classList.toggle('on', this.video.loop);
+    this.ui.loopBtn.classList.toggle('on', this.loops);
   }
 }
 
-/** The largest ancestor that is still roughly the video's size: Instagram's own overlays live in here. */
-function mediaBox(video: HTMLVideoElement, r: DOMRect): Element {
-  const area = r.width * r.height;
-  let box: Element = video;
-  let el = video.parentElement;
-  for (let depth = 0; el && el !== document.body && depth < 12; depth++, el = el.parentElement) {
-    const er = el.getBoundingClientRect();
-    if (er.width * er.height > area * 1.6 + 1) break;
-    box = el;
+/** aria-labels, titles and SVG <title> text of an element and its descendants. */
+function labelsOf(el: Element): string[] {
+  const labels = [el.getAttribute('aria-label'), el.getAttribute('title')];
+  for (const node of el.querySelectorAll('[aria-label], title')) {
+    labels.push(node.localName === 'title' ? node.textContent : node.getAttribute('aria-label'));
   }
-  return box;
+  return labels.filter((l): l is string => !!l);
 }
 
-function scrollParent(node: Element): Element {
+/** The nearest scrollable ancestor; the page itself only when the video isn't inside a dialog. */
+function findScroller(node: Element): Element | null {
   for (let el = node.parentElement; el && el !== document.body; el = el.parentElement) {
     const { overflowY } = getComputedStyle(el);
     if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight) return el;
   }
-  return document.scrollingElement ?? document.documentElement;
+  const page = document.scrollingElement;
+  if (node.closest('[role="dialog"]') || !page || page.scrollHeight <= page.clientHeight) return null;
+  return page;
+}
+
+/** Height of the scroll-snap item holding the video (one reel), or the video's own height. */
+function snapItemHeight(video: HTMLVideoElement): number {
+  for (let el = video.parentElement; el && el !== document.body; el = el.parentElement) {
+    if (getComputedStyle(el).scrollSnapAlign !== 'none') return el.getBoundingClientRect().height;
+  }
+  return video.getBoundingClientRect().height;
+}
+
+/** Fallback when there's nothing to scroll: Instagram's "Next" button, else its arrow-key navigation. */
+function goNext(video: HTMLVideoElement): void {
+  const root = video.closest('[role="dialog"]') ?? document;
+  for (const button of root.querySelectorAll<HTMLElement>('button, [role="button"], a')) {
+    if (labelsOf(button).some((l) => NEXT_LABEL.test(l))) {
+      debug('clicking Instagram next button', button);
+      button.click();
+      return;
+    }
+  }
+  for (const key of ['ArrowDown', 'ArrowRight']) {
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key, code: key, bubbles: true }));
+  }
 }
 
 function clampTipX(x: number, tipWidth: number, trackWidth: number): number {

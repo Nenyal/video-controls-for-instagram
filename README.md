@@ -7,7 +7,9 @@ instagram.com: Reels, Stories, feed posts and post modals.
 - Play/pause, current/total time
 - Playback speed 0.25×–3×, remembered across all videos
 - Mute and volume slider (scroll over the volume to adjust)
-- Loop toggle, frame stepping, picture-in-picture, fullscreen
+- Loop toggle (also turns off Instagram's forced looping), frame stepping, picture-in-picture
+- Fullscreen, where clicking the video plays and pauses instead of opening the post
+- Auto-play next reel: on reels pages, scrolls to the next reel when the current one ends
 - Keyboard shortcuts
 - The bar auto-hides after 2s of inactivity, with an optional thin progress line left visible
 
@@ -39,6 +41,7 @@ Shortcuts act on the video under the mouse, or else the most visible one. They'r
 | <kbd>F</kbd> | Fullscreen |
 | <kbd>P</kbd> | Picture-in-picture |
 | <kbd>R</kbd> | Loop |
+| <kbd>N</kbd> | Auto-play next reel |
 
 ## Settings
 
@@ -55,8 +58,24 @@ the idle progress line on or off. Changes apply immediately in open tabs.
   cover it. Clicks on the bar are stopped before they reach Instagram, so they don't pause the video or
   advance a story. Wheel events are passed on to Instagram's scroll container.
 - The bar hides when something unrelated covers the video, such as a modal or a fixed nav bar.
+- Muting from our bar clicks Instagram's own audio button when it can find one, so Instagram's icon and its
+  remembered mute state stay in sync. If Instagram changes the mute state without a click from you (e.g. on
+  play or pause), the extension restores your choice.
 - Instagram resets `playbackRate` when it swaps sources, so the remembered speed is re-applied on
   `loadstart`, `loadedmetadata`, `play` and `ratechange`.
 - Settings live in `chrome.storage.sync` (`src/shared/settings.ts`).
+
+## Debugging
+
+If the bar doesn't appear somewhere, or mute or auto-next misbehave, run this in the DevTools console on
+instagram.com and reload:
+
+```js
+localStorage.setItem('ivc-debug', '1')
+```
+
+The console then logs `[ivc]` messages: why a bar is hidden and which element covers it, which Instagram
+button was clicked, and when Instagram's mute changes are reverted. Use `localStorage.removeItem('ivc-debug')`
+to turn it off.
 
 `npm run icons` regenerates the PNG icons in `public/icons/`.
