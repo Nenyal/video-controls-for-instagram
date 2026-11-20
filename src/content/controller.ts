@@ -86,6 +86,8 @@ export class VideoController {
 
   /** Loop state the user chose with our controls, enforced over Instagram's own looping. */
   private loopOverride: boolean | null = null;
+  /** Instagram loops reels with its own code (video.loop stays false); seen on the reels feed. */
+  private igLoops = isReelsPage();
   private lastTime = 0;
   private lastOwnSeek = -Infinity;
   private lastOwnPlay = -Infinity;
@@ -333,7 +335,7 @@ export class VideoController {
   // ---------- internals ----------
 
   private get loops(): boolean {
-    return this.loopOverride ?? this.video.loop;
+    return this.loopOverride ?? (this.video.loop || this.igLoops);
   }
 
   private setShown(value: boolean, reason: string): void {
@@ -376,6 +378,7 @@ export class VideoController {
     video.addEventListener('loadstart', () => {
       // New media: per-video choices start fresh.
       this.loopOverride = null;
+      this.igLoops = isReelsPage();
       this.advanced = false;
       this.lastTime = 0;
     }, opts);
@@ -389,6 +392,7 @@ export class VideoController {
     video.addEventListener('play', () => {
       // Instagram restarts reels itself after `ended`; respect "loop off".
       const restartedByInstagram = performance.now() - this.endedAt < 500 && performance.now() - this.lastOwnPlay > 500;
+      if (restartedByInstagram) this.igLoops = true;
       if (this.loopOverride === false && restartedByInstagram) this.stopAtEnd();
     }, opts);
     video.addEventListener('enterpictureinpicture', () => this.ui.pipBtn.classList.add('on'), opts);
@@ -546,16 +550,29 @@ export class VideoController {
     if (button && this.muteSearchScope()?.contains(button)) this.igMuteButton = new WeakRef(button);
   }
 
+  /**
+   * Instagram's audio toggle: the smallest labelled button over the video. Size matters because on the
+   * reels feed the whole-video tap-to-pause layer is also a button and contains the audio icon.
+   */
   private findInstagramMuteButton(): HTMLElement | null {
     const learned = this.igMuteButton?.deref();
     if (learned?.isConnected) return learned;
-    for (let el = this.video.parentElement, depth = 0; el && el !== document.body && depth < 10; el = el.parentElement, depth++) {
-      if (el.querySelectorAll('video').length > 1) break;
-      for (const button of el.querySelectorAll<HTMLElement>('button, [role="button"]')) {
-        if (labelsOf(button).some((l) => MUTE_LABEL.test(l))) return button;
+    const scope = this.muteSearchScope();
+    if (!scope) return null;
+    const v = this.video.getBoundingClientRect();
+    let best: HTMLElement | null = null;
+    let bestArea = (v.width * v.height) / 8;
+    for (const button of scope.querySelectorAll<HTMLElement>('button, [role="button"]')) {
+      const r = button.getBoundingClientRect();
+      const area = r.width * r.height;
+      const overVideo = r.right > v.left && r.left < v.right && r.bottom > v.top && r.top < v.bottom;
+      if (area === 0 || area >= bestArea || !overVideo) continue;
+      if (labelsOf(button).some((l) => MUTE_LABEL.test(l))) {
+        best = button;
+        bestArea = area;
       }
     }
-    return null;
+    return best;
   }
 
   /** The largest ancestor of the video that contains no other video. */
@@ -585,6 +602,7 @@ export class VideoController {
     if (t < d - 1) this.advanced = false;
     // Instagram may restart the video between our checks; catch the jump from the end back to the start.
     const wrapped = prev > d - 1 && t < 1 && performance.now() - this.lastOwnSeek > 400;
+    if (wrapped && this.loopOverride === null) this.igLoops = true;
     if (this.autoNextActive() && (t >= d - END_MARGIN || wrapped)) this.advance();
     else if (this.loopOverride === false && wrapped) this.stopAtEnd();
   }
