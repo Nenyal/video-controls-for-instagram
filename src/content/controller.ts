@@ -60,6 +60,8 @@ export function isStoriesPage(): boolean {
   return /^\/stories\//.test(location.pathname);
 }
 
+const POST_LINK = 'a[href*="/p/"], a[href*="/reel/"], a[href*="/reels/"]';
+
 const END_LABELS: Record<ReelsEnd, string> = { loop: 'Loop', next: 'Play next reel', stop: 'Stop at end' };
 
 export class VideoController {
@@ -72,6 +74,8 @@ export class VideoController {
   private rect: DOMRect | null = null;
   private lastOcclusionCheck = 0;
   private occluded = false;
+  /** Hover-preview tile in a grid (explore, profile): no controls. Null until it can be measured. */
+  private gridTile: boolean | null;
   /** Space kept free at the bottom for Instagram's own controls (story reply box, like, share). */
   private bottomInset = 0;
 
@@ -109,6 +113,9 @@ export class VideoController {
 
   constructor(readonly video: HTMLVideoElement, private readonly ctx: ControllerHost) {
     this.lastMuted = video.muted;
+    // Everything that plays on the explore grid is a hover preview, including tiles still in the DOM
+    // behind a reel opened from it (by then the URL is /reels/...).
+    this.gridTile = location.pathname.startsWith('/explore') && !video.closest('[role="dialog"]') ? true : null;
     this.host = document.createElement(HOST_TAG);
     this.host.style.cssText =
       'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483000;pointer-events:none;display:none;contain:layout style;';
@@ -172,6 +179,11 @@ export class VideoController {
 
     if (r.width < MIN_WIDTH || r.height < MIN_HEIGHT || visibleHeight < Math.min(MIN_HEIGHT, r.height)) {
       this.setShown(false, 'too small');
+      return;
+    }
+    this.gridTile ??= isGridTile(this.video, r);
+    if (this.gridTile) {
+      this.setShown(false, 'grid preview');
       return;
     }
     if (!isFs && this.occluded) {
@@ -398,6 +410,15 @@ export class VideoController {
     const x = r.left + r.width / 2;
     const y = visibleBottom - 12;
     if (x < 0 || x >= window.innerWidth || y < 0 || y >= window.innerHeight) return false;
+    // A dialog over this spot hides us even if it lets pointer events through (hit testing skips those).
+    for (const dialog of document.querySelectorAll('[role="dialog"], dialog[open]')) {
+      if (dialog.contains(this.video)) continue;
+      const b = dialog.getBoundingClientRect();
+      if (x >= b.left && x < b.right && y >= b.top && y < b.bottom && getComputedStyle(dialog).visibility !== 'hidden') {
+        debug('covered by dialog', dialog);
+        return true;
+      }
+    }
     const hit = document.elementsFromPoint(x, y).find((el) => el.localName !== HOST_TAG);
     for (let el = hit ?? null; el && el !== document.body; el = el.parentElement) {
       if (el.contains(this.video)) return false;
@@ -830,6 +851,24 @@ export class VideoController {
     button.title = `At end: ${END_LABELS[mode].toLowerCase()} (r)`;
     button.setAttribute('aria-label', button.title);
   }
+}
+
+/**
+ * True for a video inside a grid tile: walking up from the video, the first container holding
+ * several posts has another post beside it on the same row. Feeds stack posts vertically instead.
+ */
+function isGridTile(video: HTMLVideoElement, v: DOMRect): boolean {
+  for (let el = video.parentElement, depth = 0; el && el !== document.body && depth < 10; el = el.parentElement, depth++) {
+    const links = [...el.querySelectorAll(POST_LINK)];
+    if (new Set(links.map((a) => a.getAttribute('href'))).size < 2) continue;
+    return links.some((a) => {
+      if (a.contains(video)) return false;
+      const b = a.getBoundingClientRect();
+      const sameRow = b.width > 0 && Math.abs(b.top - v.top) < v.height / 2;
+      return sameRow && (b.right <= v.left + 2 || b.left >= v.right - 2);
+    });
+  }
+  return false;
 }
 
 /** aria-labels, titles and SVG <title> text of an element and its descendants. */
