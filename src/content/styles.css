@@ -75,6 +75,33 @@
   opacity: 0.55;
 }
 
+/* Round download button shown over post and story images. */
+.btn.image-download {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.55);
+}
+
+.btn.image-download:hover {
+  background: rgb(0 0 0 / 0.75);
+}
+
+/* Download progress on the button itself. */
+.btn.busy svg {
+  animation: ivc-pulse 0.8s ease-in-out infinite alternate;
+}
+
+.btn.failed {
+  color: #ff6b6b;
+}
+
+@keyframes ivc-pulse {
+  to {
+    opacity: 0.35;
+  }
+}
+
 /* ±5s buttons only on stories, where the arrow keys belong to Instagram. */
 .btn.seek {
   display: none;

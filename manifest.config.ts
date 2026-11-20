@@ -19,7 +19,11 @@ export default defineManifest({
       32: 'icons/icon32.png',
     },
   },
-  permissions: ['storage'],
+  permissions: ['storage', 'downloads'],
+  background: {
+    service_worker: 'src/background.ts',
+    type: 'module',
+  },
   content_scripts: [
     {
       matches: ['https://www.instagram.com/*'],

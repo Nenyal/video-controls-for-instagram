@@ -72,6 +72,10 @@ export function installShortcuts(
       case 'R':
         c.cycleEndMode();
         break;
+      case 'd':
+      case 'D':
+        void c.download();
+        break;
       case ',':
         c.stepFrame(-1);
         break;

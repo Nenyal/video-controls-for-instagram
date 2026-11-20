@@ -1,5 +1,6 @@
 import { VideoController, type ControllerHost } from './controller';
 import { installShortcuts, type ActiveVideo } from './shortcuts';
+import { installImageDownloads } from './images';
 import {
   DEFAULTS, createDebouncedSaver, loadSettings, onSettingsChanged, type Settings,
 } from '../shared/settings';
@@ -129,6 +130,7 @@ function start(): void {
   }, { capture: true, passive: true, signal });
 
   installShortcuts(() => settings, activeVideo, signal);
+  installImageDownloads(signal);
   scan();
 }
 

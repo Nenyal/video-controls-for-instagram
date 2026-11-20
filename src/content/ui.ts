@@ -16,6 +16,9 @@ const ICONS = {
   loop: 'M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z',
   pip: 'M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z',
   fullscreen: 'M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z',
+  download: 'M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z',
+  done: 'M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z',
+  failed: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z',
   fullscreenExit: 'M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z',
 } as const;
 
@@ -47,7 +50,15 @@ function seekButton(seconds: number, label: string, className: string): HTMLButt
   return button;
 }
 
-function iconButton(name: IconName, label: string, className = ''): HTMLButtonElement {
+/** Shows a download's progress on its button: busy while resolving, then a check or an error icon. */
+export function setDownloadState(button: HTMLButtonElement, state: 'busy' | 'done' | 'failed' | 'idle'): void {
+  button.classList.toggle('busy', state === 'busy');
+  button.classList.toggle('failed', state === 'failed');
+  setIcon(button, state === 'done' ? 'done' : state === 'failed' ? 'failed' : 'download');
+  button.title = state === 'failed' ? 'Download unavailable' : 'Download (d)';
+}
+
+export function iconButton(name: IconName, label: string, className = ''): HTMLButtonElement {
   const button = el('button', `btn ${className}`.trim());
   button.type = 'button';
   button.title = label;
@@ -89,6 +100,7 @@ export interface ControlsUI {
   /** Loop / play next / stop — what happens at the end of the video. */
   loopBtn: HTMLButtonElement;
   pipBtn: HTMLButtonElement;
+  downloadBtn: HTMLButtonElement;
   fsBtn: HTMLButtonElement;
 }
 
@@ -158,14 +170,15 @@ export function buildUI(): ControlsUI {
 
   const loopBtn = iconButton('loop', 'Loop (r)', 'toggle loop');
   const pipBtn = iconButton('pip', 'Picture-in-picture (p)', 'toggle pip');
+  const downloadBtn = iconButton('download', 'Download (d)', 'download');
   const fsBtn = iconButton('fullscreen', 'Fullscreen (f)');
 
-  row.append(playBtn, backBtn, forwardBtn, time, spacer, volumeGroup, speedWrap, loopBtn, pipBtn, fsBtn);
+  row.append(playBtn, backBtn, forwardBtn, time, spacer, volumeGroup, speedWrap, loopBtn, pipBtn, downloadBtn, fsBtn);
   bar.append(progress, row);
   wrap.append(catcher, osd, line, bar);
 
   return {
     wrap, osd, catcher, backBtn, forwardBtn, line, linePlayed, bar, progress, buffered, played, thumb, tip, playBtn, time, timeCurrent, timeDuration,
-    muteBtn, volume, volumeFill, speedBtn, speedMenu, speedItems, loopBtn, pipBtn, fsBtn,
+    muteBtn, volume, volumeFill, speedBtn, speedMenu, speedItems, loopBtn, pipBtn, downloadBtn, fsBtn,
   };
 }

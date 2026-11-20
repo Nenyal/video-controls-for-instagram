@@ -1,5 +1,6 @@
 import css from './styles.css?inline';
-import { buildUI, setIcon, type ControlsUI } from './ui';
+import { buildUI, setDownloadState, setIcon, type ControlsUI } from './ui';
+import { bestVideo, findMediaRef, resolveMedia, startDownload } from './media';
 import { formatSpeed, formatTime } from '../shared/format';
 import { SPEEDS, type ReelsEnd, type Settings } from '../shared/settings';
 
@@ -21,7 +22,7 @@ const SIDE_INSET = 8;
 const SIDE_MARGIN_Y = 80;
 const SIDE_MAX_HEIGHT = 520;
 /** Height of everything in the expanded pill except its progress bar. */
-const SIDE_CONTROLS_HEIGHT = 300;
+const SIDE_CONTROLS_HEIGHT = 334;
 /** How long after a click on Instagram's UI a mute change still counts as the user's doing. */
 const USER_CLICK_WINDOW = 600;
 /** Auto-next triggers this close to the end, before Instagram gets a chance to loop. */
@@ -344,6 +345,22 @@ export class VideoController {
     this.renderLoop();
   }
 
+  /** Saves the original, highest-quality file of this video. */
+  async download(): Promise<void> {
+    const button = this.ui.downloadBtn;
+    if (button.classList.contains('busy')) return;
+    setDownloadState(button, 'busy');
+    this.flash('Preparing download…');
+    const ref = findMediaRef(this.video);
+    const item = ref && (await resolveMedia(ref));
+    const file = item && bestVideo(item, this.video.duration);
+    debug('download', { ref, file });
+    const ok = !!file && (await startDownload(file));
+    setDownloadState(button, ok ? 'done' : 'failed');
+    this.flash(ok ? 'Downloading' : 'Download unavailable');
+    setTimeout(() => setDownloadState(button, 'idle'), ok ? 1500 : 2500);
+  }
+
   stepFrame(direction: 1 | -1): void {
     this.video.pause();
     this.seekTo(this.video.currentTime + direction * this.frameDuration);
@@ -490,6 +507,7 @@ export class VideoController {
     ui.backBtn.addEventListener('click', () => this.seekBy(-5), opts);
     ui.forwardBtn.addEventListener('click', () => this.seekBy(5), opts);
     ui.pipBtn.addEventListener('click', () => void this.togglePip(), opts);
+    ui.downloadBtn.addEventListener('click', () => void this.download(), opts);
     ui.fsBtn.addEventListener('click', () => void this.toggleFullscreen(), opts);
 
     ui.speedBtn.addEventListener('click', () => ui.speedMenu.classList.toggle('open'), opts);
@@ -864,15 +882,15 @@ export class VideoController {
 }
 
 /**
- * True for a video inside a grid tile: walking up from the video, the first container holding
+ * True for a video or image inside a grid tile: walking up from it, the first container holding
  * several posts has another post beside it on the same row. Feeds stack posts vertically instead.
  */
-function isGridTile(video: HTMLVideoElement, v: DOMRect): boolean {
-  for (let el = video.parentElement, depth = 0; el && el !== document.body && depth < 10; el = el.parentElement, depth++) {
+export function isGridTile(media: Element, v: DOMRect): boolean {
+  for (let el = media.parentElement, depth = 0; el && el !== document.body && depth < 10; el = el.parentElement, depth++) {
     const links = [...el.querySelectorAll(POST_LINK)];
     if (new Set(links.map((a) => a.getAttribute('href'))).size < 2) continue;
     return links.some((a) => {
-      if (a.contains(video)) return false;
+      if (a.contains(media)) return false;
       const b = a.getBoundingClientRect();
       const sameRow = b.width > 0 && Math.abs(b.top - v.top) < v.height / 2;
       return sameRow && (b.right <= v.left + 2 || b.left >= v.right - 2);

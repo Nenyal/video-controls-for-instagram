@@ -10,6 +10,9 @@ instagram.com: Reels, Stories, feed posts and post modals.
 - One end-of-video button. On reels pages it cycles **loop → play next reel → stop**, and the choice is
   remembered. On other pages it toggles loop / stop for that video. Stop also overrides Instagram's
   own looping.
+- Download in the best quality Instagram has: a download button on every video's controls (or
+  <kbd>D</kbd>), and one that appears on the top-right corner of post and story images on hover.
+  Carousels download the slide you're looking at.
 - Frame stepping and picture-in-picture
 - Fullscreen, where clicking anywhere plays and pauses instead of opening the post
 - Stories: the controls are a small pill on the story's right edge (a short progress bar and
@@ -47,6 +50,7 @@ Shortcuts act on the video under the mouse, or else the most visible one. They'r
 | <kbd>F</kbd> | Fullscreen |
 | <kbd>P</kbd> | Picture-in-picture |
 | <kbd>R</kbd> | At end: loop → play next reel → stop (loop ↔ stop outside reels pages) |
+| <kbd>D</kbd> | Download the video |
 
 ## Settings
 
@@ -69,6 +73,12 @@ the idle progress line on or off. Changes apply immediately in open tabs.
 - Instagram resets `playbackRate` when it swaps sources, so the remembered speed is re-applied on
   `loadstart`, `loadedmetadata`, `play` and `ratechange`.
 - Settings live in `chrome.storage.sync` (`src/shared/settings.ts`).
+- Downloads (`src/content/media.ts`): the page only has streamed video (blob: URLs) and images sized
+  for your screen. The extension asks Instagram's media API, which instagram.com itself uses, for the
+  post's stored versions and picks the largest: progressive MP4s with audio for videos, the original
+  upload size for images. Without a session it falls back to the data embedded in the page, and for
+  images to the largest `srcset` entry. Files are saved by the background worker with
+  `chrome.downloads`, because Instagram's CDN is cross-origin.
 
 ## Debugging
 
