@@ -1,3 +1,6 @@
+/** What happens when a reel ends on reels pages. */
+export type ReelsEnd = 'loop' | 'next' | 'stop';
+
 export interface Settings {
   enabled: boolean;
   /** Playback speed applied to every video; remembered globally. */
@@ -8,8 +11,7 @@ export interface Settings {
   seekStep: number;
   /** Keep a thin progress line visible while the bar is hidden. */
   progressLine: boolean;
-  /** On reels pages, scroll to the next reel when the current one finishes. */
-  autoNext: boolean;
+  reelsEnd: ReelsEnd;
 }
 
 export const DEFAULTS: Settings = {
@@ -19,7 +21,7 @@ export const DEFAULTS: Settings = {
   shortcuts: true,
   seekStep: 5,
   progressLine: true,
-  autoNext: false,
+  reelsEnd: 'loop',
 };
 
 export const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];

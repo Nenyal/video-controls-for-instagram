@@ -1,7 +1,7 @@
 import css from './styles.css?inline';
 import { buildUI, setIcon, type ControlsUI } from './ui';
 import { formatSpeed, formatTime } from '../shared/format';
-import { SPEEDS, type Settings } from '../shared/settings';
+import { SPEEDS, type ReelsEnd, type Settings } from '../shared/settings';
 
 export interface ControllerHost {
   readonly settings: Settings;
@@ -22,7 +22,7 @@ const END_MARGIN = 0.25;
 
 // Events that must not reach Instagram's handlers (play/pause toggles, story taps, outside-click closers).
 const ISOLATED_EVENTS = [
-  'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick',
+  'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'auxclick', 'dblclick',
   'touchstart', 'touchend', 'contextmenu',
 ] as const;
 
@@ -56,6 +56,12 @@ export function isReelsPage(): boolean {
   return /^\/reels?\//.test(location.pathname);
 }
 
+export function isStoriesPage(): boolean {
+  return /^\/stories\//.test(location.pathname);
+}
+
+const END_LABELS: Record<ReelsEnd, string> = { loop: 'Loop', next: 'Play next reel', stop: 'Stop at end' };
+
 export class VideoController {
   readonly host: HTMLElement;
   private readonly ui: ControlsUI;
@@ -66,6 +72,8 @@ export class VideoController {
   private rect: DOMRect | null = null;
   private lastOcclusionCheck = 0;
   private occluded = false;
+  /** Space kept free at the bottom for Instagram's own controls (story reply box, like, share). */
+  private bottomInset = 0;
 
   private lastActivity = 0;
   private barHovered = false;
@@ -77,7 +85,7 @@ export class VideoController {
   private osdTimer: ReturnType<typeof setTimeout> | undefined;
 
   private fsTarget: HTMLElement | null = null;
-  private fsSaved = { objectFit: '', background: '' };
+  private fsSaved = { objectFit: '', width: '', height: '', background: '' };
 
   /** Mute state the user chose with our controls; Instagram is not allowed to change it behind our back. */
   private wantMuted: boolean | null = null;
@@ -97,6 +105,7 @@ export class VideoController {
   // Cached render state so per-frame updates only touch the DOM when something changed.
   private lastTimeText = '';
   private lastPaused: boolean | null = null;
+  private lastEndMode = '';
 
   constructor(readonly video: HTMLVideoElement, private readonly ctx: ControllerHost) {
     this.lastMuted = video.muted;
@@ -138,7 +147,7 @@ export class VideoController {
       this.video.volume = patch.volume;
     }
     if (patch.progressLine !== undefined) this.ui.wrap.classList.toggle('show-line', patch.progressLine);
-    if (patch.autoNext !== undefined) this.ui.nextBtn.classList.toggle('on', patch.autoNext);
+    if (patch.reelsEnd !== undefined) this.renderLoop();
     this.renderSpeed();
   }
 
@@ -147,20 +156,23 @@ export class VideoController {
   frame(now: number): void {
     if (!this.intersecting) return;
     this.checkEnd();
-    const r = this.video.getBoundingClientRect();
     const isFs = this.isFullscreen;
+    // In fullscreen, cover the whole screen: any click outside our overlay would land on Instagram's
+    // DOM, where feed videos sit inside a link to the reel.
+    const r = isFs ? new DOMRect(0, 0, window.innerWidth, window.innerHeight) : this.video.getBoundingClientRect();
+    if (!isFs && now - this.lastOcclusionCheck > OCCLUSION_INTERVAL) {
+      this.lastOcclusionCheck = now;
+      this.bottomInset = this.computeBottomInset(r);
+      this.occluded = this.checkOccluded(r, Math.min(r.bottom - this.bottomInset, window.innerHeight));
+    }
     // Clamp to the viewport so the bar sits at the visible bottom of tall or partly scrolled videos.
     const top = Math.max(r.top, 0);
-    const bottom = Math.min(r.bottom, window.innerHeight);
+    const bottom = Math.min(r.bottom - (isFs ? 0 : this.bottomInset), window.innerHeight);
     const visibleHeight = bottom - top;
 
     if (r.width < MIN_WIDTH || r.height < MIN_HEIGHT || visibleHeight < Math.min(MIN_HEIGHT, r.height)) {
       this.setShown(false, 'too small');
       return;
-    }
-    if (!isFs && now - this.lastOcclusionCheck > OCCLUSION_INTERVAL) {
-      this.lastOcclusionCheck = now;
-      this.occluded = this.checkOccluded(r, bottom);
     }
     if (!isFs && this.occluded) {
       this.setShown(false, 'covered');
@@ -181,7 +193,7 @@ export class VideoController {
       this.scrubbing || this.draggingVolume || this.barHovered || menuOpen ||
       this.video.paused || now - this.lastActivity < HIDE_DELAY;
     this.ui.wrap.classList.toggle('idle', !active);
-    this.ui.wrap.classList.toggle('reels', isReelsPage());
+    this.ui.wrap.classList.toggle('stories', isStoriesPage());
 
     this.renderProgress();
     this.renderTime();
@@ -283,17 +295,19 @@ export class VideoController {
     this.flash(`Volume ${Math.round(this.video.volume * 100)}%`);
   }
 
-  toggleLoop(): void {
-    this.loopOverride = !this.loops;
-    this.video.loop = this.loopOverride;
+  /** Loop → play next reel → stop on reels pages (remembered); loop ↔ stop for this video elsewhere. */
+  cycleEndMode(): void {
+    if (isReelsPage()) {
+      const order: ReelsEnd[] = ['loop', 'next', 'stop'];
+      const next = order[(order.indexOf(this.ctx.settings.reelsEnd) + 1) % order.length];
+      this.ctx.update({ reelsEnd: next });
+      this.flash(END_LABELS[next]);
+    } else {
+      this.loopOverride = !this.loops;
+      this.video.loop = this.loopOverride;
+      this.flash(END_LABELS[this.loopOverride ? 'loop' : 'stop']);
+    }
     this.renderLoop();
-    this.flash(this.loopOverride ? 'Loop on' : 'Loop off');
-  }
-
-  toggleAutoNext(): void {
-    const autoNext = !this.ctx.settings.autoNext;
-    this.ctx.update({ autoNext });
-    this.flash(autoNext ? 'Auto-next on' : 'Auto-next off');
   }
 
   stepFrame(direction: 1 | -1): void {
@@ -336,6 +350,35 @@ export class VideoController {
 
   private get loops(): boolean {
     return this.loopOverride ?? (this.video.loop || this.igLoops);
+  }
+
+  /** What happens at the end of this video, or null to leave it to Instagram. */
+  private endMode(): ReelsEnd | null {
+    if (isReelsPage()) {
+      const mode = this.ctx.settings.reelsEnd;
+      // Scrolling the feed would leave fullscreen showing a paused reel; loop instead.
+      return mode === 'next' && this.isFullscreen ? 'loop' : mode;
+    }
+    return this.loopOverride === null ? null : this.loopOverride ? 'loop' : 'stop';
+  }
+
+  /**
+   * On stories, Instagram's reply box and like/share buttons sit over the bottom of the video.
+   * Returns how far the bar must move up to stay clear of them.
+   */
+  private computeBottomInset(r: DOMRect): number {
+    if (!isStoriesPage()) return 0;
+    const lowerArea = r.top + r.height * 0.6;
+    const maxArea = (r.width * r.height) / 6; // skips Instagram's large tap-to-navigate zones
+    let highest = Infinity;
+    const controls = 'textarea, input, [contenteditable="true"], button, [role="button"], a[href]';
+    for (const el of document.querySelectorAll(controls)) {
+      const b = el.getBoundingClientRect();
+      if (b.width === 0 || b.height === 0 || b.width * b.height > maxArea) continue;
+      if (b.top < lowerArea || b.top >= r.bottom || b.right <= r.left || b.left >= r.right) continue;
+      highest = Math.min(highest, b.top);
+    }
+    return highest === Infinity ? 0 : r.bottom - highest + 4;
   }
 
   private setShown(value: boolean, reason: string): void {
@@ -387,13 +430,13 @@ export class VideoController {
     video.addEventListener('timeupdate', () => this.checkEnd(), opts);
     video.addEventListener('ended', () => {
       this.endedAt = performance.now();
-      if (this.autoNextActive()) this.advance();
+      if (this.endMode() === 'next') this.advance();
     }, opts);
     video.addEventListener('play', () => {
-      // Instagram restarts reels itself after `ended`; respect "loop off".
+      // Instagram restarts reels itself after `ended`; respect "stop at end".
       const restartedByInstagram = performance.now() - this.endedAt < 500 && performance.now() - this.lastOwnPlay > 500;
       if (restartedByInstagram) this.igLoops = true;
-      if (this.loopOverride === false && restartedByInstagram) this.stopAtEnd();
+      if (this.endMode() === 'stop' && restartedByInstagram) this.stopAtEnd();
     }, opts);
     video.addEventListener('enterpictureinpicture', () => this.ui.pipBtn.classList.add('on'), opts);
     video.addEventListener('leavepictureinpicture', () => this.ui.pipBtn.classList.remove('on'), opts);
@@ -408,6 +451,9 @@ export class VideoController {
       for (const type of ISOLATED_EVENTS) target.addEventListener(type, (e) => e.stopPropagation(), opts);
       // Keep focus out of our buttons so Space keeps working as a shortcut instead of "pressing" them.
       target.addEventListener('mousedown', (e) => e.preventDefault(), opts);
+      // In fullscreen the overlay sits inside Instagram's DOM, where feed videos are wrapped in a link to
+      // the reel. stopPropagation doesn't stop a link from navigating; cancelling the click does.
+      for (const type of ['click', 'auxclick'] as const) target.addEventListener(type, (e) => e.preventDefault(), opts);
     }
     ui.catcher.addEventListener('click', () => this.togglePlay(), opts);
     ui.bar.addEventListener('pointerenter', () => (this.barHovered = true), opts);
@@ -416,8 +462,9 @@ export class VideoController {
 
     ui.playBtn.addEventListener('click', () => this.togglePlay(), opts);
     ui.muteBtn.addEventListener('click', () => this.toggleMute(), opts);
-    ui.loopBtn.addEventListener('click', () => this.toggleLoop(), opts);
-    ui.nextBtn.addEventListener('click', () => this.toggleAutoNext(), opts);
+    ui.loopBtn.addEventListener('click', () => this.cycleEndMode(), opts);
+    ui.backBtn.addEventListener('click', () => this.seekBy(-5), opts);
+    ui.forwardBtn.addEventListener('click', () => this.seekBy(5), opts);
     ui.pipBtn.addEventListener('click', () => void this.togglePip(), opts);
     ui.fsBtn.addEventListener('click', () => void this.toggleFullscreen(), opts);
 
@@ -585,15 +632,12 @@ export class VideoController {
     return scope;
   }
 
-  // ---------- end of video: loop off and auto-next ----------
-
-  private autoNextActive(): boolean {
-    return this.ctx.settings.autoNext && isReelsPage() && !this.isFullscreen;
-  }
+  // ---------- end of video: loop, play next reel, or stop ----------
 
   private checkEnd(): void {
     const { video } = this;
-    if (this.loopOverride !== null && video.loop !== this.loopOverride) video.loop = this.loopOverride;
+    const mode = this.endMode();
+    if (mode !== null && video.loop !== (mode === 'loop')) video.loop = mode === 'loop';
     const d = video.duration;
     const t = video.currentTime;
     const prev = this.lastTime;
@@ -602,13 +646,13 @@ export class VideoController {
     if (t < d - 1) this.advanced = false;
     // Instagram may restart the video between our checks; catch the jump from the end back to the start.
     const wrapped = prev > d - 1 && t < 1 && performance.now() - this.lastOwnSeek > 400;
-    if (wrapped && this.loopOverride === null) this.igLoops = true;
-    if (this.autoNextActive() && (t >= d - END_MARGIN || wrapped)) this.advance();
-    else if (this.loopOverride === false && wrapped) this.stopAtEnd();
+    if (wrapped && mode === null) this.igLoops = true;
+    if (mode === 'next' && (t >= d - END_MARGIN || wrapped)) this.advance();
+    else if (mode === 'stop' && wrapped) this.stopAtEnd();
   }
 
   private stopAtEnd(): void {
-    debug('loop off: stopping at end');
+    debug('stopping at end');
     this.video.pause();
     this.seekTo(this.video.duration);
   }
@@ -638,8 +682,11 @@ export class VideoController {
     if (!target) return;
     if (document.fullscreenElement === target) {
       // Only the fullscreen element's subtree is rendered, so move the overlay inside it.
-      this.fsSaved = { objectFit: this.video.style.objectFit, background: target.style.background };
-      this.video.style.objectFit = 'contain';
+      const vs = this.video.style;
+      this.fsSaved = { objectFit: vs.objectFit, width: vs.width, height: vs.height, background: target.style.background };
+      vs.objectFit = 'contain';
+      vs.width = '100%';
+      vs.height = '100%';
       target.style.background = '#000';
       target.append(this.host);
       this.ui.wrap.classList.add('fs');
@@ -656,7 +703,11 @@ export class VideoController {
 
   private restoreFullscreenStyles(): void {
     if (!this.fsTarget) return;
-    this.video.style.objectFit = this.fsSaved.objectFit;
+    Object.assign(this.video.style, {
+      objectFit: this.fsSaved.objectFit,
+      width: this.fsSaved.width,
+      height: this.fsSaved.height,
+    });
     this.fsTarget.style.background = this.fsSaved.background;
   }
 
@@ -770,7 +821,14 @@ export class VideoController {
   }
 
   private renderLoop(): void {
-    this.ui.loopBtn.classList.toggle('on', this.loops);
+    const mode: ReelsEnd = isReelsPage() ? this.ctx.settings.reelsEnd : this.loops ? 'loop' : 'stop';
+    if (mode === this.lastEndMode) return;
+    this.lastEndMode = mode;
+    const button = this.ui.loopBtn;
+    setIcon(button, mode === 'next' ? 'next' : 'loop');
+    button.classList.toggle('on', mode !== 'stop');
+    button.title = `At end: ${END_LABELS[mode].toLowerCase()} (r)`;
+    button.setAttribute('aria-label', button.title);
   }
 }
 

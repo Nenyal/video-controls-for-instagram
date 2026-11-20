@@ -1,4 +1,4 @@
-import { SPEEDS, loadSettings, saveSettings, type Settings } from '../shared/settings';
+import { SPEEDS, loadSettings, saveSettings, type ReelsEnd, type Settings } from '../shared/settings';
 import { formatSpeed } from '../shared/format';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -8,7 +8,7 @@ const speed = $<HTMLSelectElement>('speed');
 const seekStep = $<HTMLSelectElement>('seekStep');
 const progressLine = $<HTMLInputElement>('progressLine');
 const shortcuts = $<HTMLInputElement>('shortcuts');
-const autoNext = $<HTMLInputElement>('autoNext');
+const reelsEnd = $<HTMLSelectElement>('reelsEnd');
 const options = $<HTMLElement>('options');
 
 for (const s of SPEEDS) speed.add(new Option(formatSpeed(s), String(s)));
@@ -19,7 +19,7 @@ function render(settings: Settings): void {
   seekStep.value = String(settings.seekStep);
   progressLine.checked = settings.progressLine;
   shortcuts.checked = settings.shortcuts;
-  autoNext.checked = settings.autoNext;
+  reelsEnd.value = settings.reelsEnd;
   options.classList.toggle('disabled', !settings.enabled);
 }
 
@@ -40,4 +40,4 @@ bind(speed, () => ({ speed: Number(speed.value) }));
 bind(seekStep, () => ({ seekStep: Number(seekStep.value) }));
 bind(progressLine, () => ({ progressLine: progressLine.checked }));
 bind(shortcuts, () => ({ shortcuts: shortcuts.checked }));
-bind(autoNext, () => ({ autoNext: autoNext.checked }));
+bind(reelsEnd, () => ({ reelsEnd: reelsEnd.value as ReelsEnd }));

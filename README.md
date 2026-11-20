@@ -7,9 +7,13 @@ instagram.com: Reels, Stories, feed posts and post modals.
 - Play/pause, current/total time
 - Playback speed 0.25×–3×, remembered across all videos
 - Mute and volume slider (scroll over the volume to adjust)
-- Loop toggle (also turns off Instagram's forced looping), frame stepping, picture-in-picture
-- Fullscreen, where clicking the video plays and pauses instead of opening the post
-- Auto-play next reel: on reels pages, scrolls to the next reel when the current one ends
+- One end-of-video button. On reels pages it cycles **loop → play next reel → stop**, and the choice is
+  remembered. On other pages it toggles loop / stop for that video. Stop also overrides Instagram's
+  own looping.
+- Frame stepping and picture-in-picture
+- Fullscreen, where clicking anywhere plays and pauses instead of opening the post
+- Stories: the bar sits above Instagram's reply box and like/share buttons, ←/→ keep switching stories,
+  and −5s / +5s buttons on the bar handle seeking
 - Keyboard shortcuts
 - The bar auto-hides after 2s of inactivity, with an optional thin progress line left visible
 
@@ -31,7 +35,7 @@ Shortcuts act on the video under the mouse, or else the most visible one. They'r
 | Key | Action |
 | --- | --- |
 | <kbd>Space</kbd> / <kbd>K</kbd> | Play / pause |
-| <kbd>←</kbd> / <kbd>→</kbd> | Seek back / forward (step set in popup, default 5s) |
+| <kbd>←</kbd> / <kbd>→</kbd> | Seek back / forward (step set in popup, default 5s). On stories they keep Instagram's previous/next story |
 | <kbd>J</kbd> / <kbd>L</kbd> | Seek ±10s |
 | <kbd>0</kbd>–<kbd>9</kbd> | Jump to 0–90% |
 | <kbd>&lt;</kbd> / <kbd>&gt;</kbd> | Slower / faster |
@@ -40,8 +44,7 @@ Shortcuts act on the video under the mouse, or else the most visible one. They'r
 | <kbd>↑</kbd> / <kbd>↓</kbd> | Volume (only while hovering a video) |
 | <kbd>F</kbd> | Fullscreen |
 | <kbd>P</kbd> | Picture-in-picture |
-| <kbd>R</kbd> | Loop |
-| <kbd>N</kbd> | Auto-play next reel |
+| <kbd>R</kbd> | At end: loop → play next reel → stop (loop ↔ stop outside reels pages) |
 
 ## Settings
 

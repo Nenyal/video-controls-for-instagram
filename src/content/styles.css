@@ -75,13 +75,18 @@
   opacity: 0.55;
 }
 
-/* Auto-next only makes sense on reels pages. */
-.btn.next {
+/* ±5s buttons only on stories, where the arrow keys belong to Instagram. */
+.btn.seek {
   display: none;
 }
 
-.wrap.reels .btn.next {
+.wrap.stories .btn.seek {
   display: inline-flex;
+}
+
+.btn.seek text {
+  font: 700 7.5px system-ui, -apple-system, sans-serif;
+  fill: currentColor;
 }
 
 .btn.on::after {

@@ -30,8 +30,12 @@
         </select>
       </div>
       <div class="field">
-        <label for="autoNext">Auto-play next reel</label>
-        <label class="switch"><input type="checkbox" id="autoNext" /><span></span></label>
+        <label for="reelsEnd">When a reel ends</label>
+        <select id="reelsEnd">
+          <option value="loop">Loop</option>
+          <option value="next">Play next reel</option>
+          <option value="stop">Stop</option>
+        </select>
       </div>
       <div class="field">
         <label for="progressLine">Thin progress line when idle</label>
@@ -46,7 +50,7 @@
         <summary>Shortcuts</summary>
         <dl>
           <dt><kbd>Space</kbd> <kbd>K</kbd></dt><dd>Play / pause</dd>
-          <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Seek back / forward</dd>
+          <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Seek back / forward (not on stories)</dd>
           <dt><kbd>J</kbd> <kbd>L</kbd></dt><dd>Seek ±10 s</dd>
           <dt><kbd>0</kbd>–<kbd>9</kbd></dt><dd>Jump to 0–90%</dd>
           <dt><kbd>&lt;</kbd> <kbd>&gt;</kbd></dt><dd>Slower / faster</dd>
@@ -55,8 +59,7 @@
           <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Volume (while hovering)</dd>
           <dt><kbd>F</kbd></dt><dd>Fullscreen</dd>
           <dt><kbd>P</kbd></dt><dd>Picture-in-picture</dd>
-          <dt><kbd>R</kbd></dt><dd>Loop</dd>
-          <dt><kbd>N</kbd></dt><dd>Auto-play next reel</dd>
+          <dt><kbd>R</kbd></dt><dd>Loop → next reel → stop</dd>
         </dl>
       </details>
     </main>
