@@ -1,6 +1,9 @@
 import css from './styles.css?inline';
 import { buildUI, setDownloadState, setIcon, type ControlsUI } from './ui';
-import { bestVideo, findMediaRef, resolveMedia, startDownload } from './media';
+import {
+  bestDash, bestVideo, fetchBytes, findMediaRef, resolveMedia, saveBlob, startDownload, type MediaItem,
+} from './media';
+import { mergeTracks } from './mux';
 import { formatSpeed, formatTime } from '../shared/format';
 import { SPEEDS, type ReelsEnd, type Settings } from '../shared/settings';
 
@@ -115,6 +118,9 @@ export class VideoController {
   // Cached render state so per-frame updates only touch the DOM when something changed.
   private lastTimeText = '';
   private lastPaused: boolean | null = null;
+  /** Media data for the current video, fetched once per source. */
+  private mediaCache: { pk: string; item: Promise<MediaItem | null> } | null = null;
+  private downloading = false;
   private lastEndMode = '';
 
   constructor(readonly video: HTMLVideoElement, private readonly ctx: ControllerHost) {
@@ -221,7 +227,7 @@ export class VideoController {
     }
     this.ui.wrap.classList.toggle('side', side);
 
-    const menuOpen = this.ui.speedMenu.classList.contains('open');
+    const menuOpen = this.ui.speedMenu.classList.contains('open') || this.ui.downloadMenu.classList.contains('open');
     this.ui.wrap.classList.toggle('expanded', side && (this.barHovered || this.scrubbing || this.draggingVolume || menuOpen));
     // Beside a story the panel covers nothing, so it never needs to hide.
     const active =
@@ -345,20 +351,44 @@ export class VideoController {
     this.renderLoop();
   }
 
-  /** Saves the original, highest-quality file of this video. */
+  /** Quick download (d): the best single MP4 with audio. */
   async download(): Promise<void> {
     const button = this.ui.downloadBtn;
     if (button.classList.contains('busy')) return;
     setDownloadState(button, 'busy');
     this.flash('Preparing download…');
     const ref = findMediaRef(this.video);
-    const item = ref && (await resolveMedia(ref));
+    const item = await this.media();
     const file = item && bestVideo(item, this.video.duration);
     debug('download', { ref, file });
     const ok = !!file && (await startDownload(file));
     setDownloadState(button, ok ? 'done' : 'failed');
     this.flash(ok ? 'Downloading' : 'Download unavailable');
     setTimeout(() => setDownloadState(button, 'idle'), ok ? 1500 : 2500);
+  }
+
+  /** Saves the frame on screen as a PNG at the video's full resolution (s). */
+  async saveFrame(): Promise<boolean> {
+    const { video } = this;
+    try {
+      if (!video.videoWidth) throw new Error('No frame yet');
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d')!.drawImage(video, 0, 0);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('Encoding failed');
+      const ref = findMediaRef(video);
+      const user = (await this.mediaCache?.item)?.user?.username;
+      const name = [user, ref?.code ?? ref?.pk ?? 'instagram', `${video.currentTime.toFixed(2)}s`].filter(Boolean).join('_');
+      saveBlob(blob, `${name}.png`);
+      this.flash('Frame saved');
+      return true;
+    } catch (error) {
+      debug('frame', error);
+      this.flash('Frame unavailable');
+      return false;
+    }
   }
 
   stepFrame(direction: 1 | -1): void {
@@ -461,6 +491,7 @@ export class VideoController {
     }
     video.addEventListener('loadstart', () => {
       // New media: per-video choices start fresh.
+      this.mediaCache = null;
       this.loopOverride = null;
       this.igLoops = isReelsPage();
       this.advanced = false;
@@ -507,10 +538,13 @@ export class VideoController {
     ui.backBtn.addEventListener('click', () => this.seekBy(-5), opts);
     ui.forwardBtn.addEventListener('click', () => this.seekBy(5), opts);
     ui.pipBtn.addEventListener('click', () => void this.togglePip(), opts);
-    ui.downloadBtn.addEventListener('click', () => void this.download(), opts);
+    ui.downloadBtn.addEventListener('click', () => void this.toggleDownloadMenu(), opts);
     ui.fsBtn.addEventListener('click', () => void this.toggleFullscreen(), opts);
 
-    ui.speedBtn.addEventListener('click', () => ui.speedMenu.classList.toggle('open'), opts);
+    ui.speedBtn.addEventListener('click', () => {
+      ui.downloadMenu.classList.remove('open');
+      ui.speedMenu.classList.toggle('open');
+    }, opts);
     for (const item of ui.speedItems) {
       item.addEventListener('click', () => {
         this.setSpeed(Number(item.dataset.speed));
@@ -523,7 +557,9 @@ export class VideoController {
       if (!e.composedPath().includes(this.host)) this.closeMenu();
     }, { ...opts, capture: true });
     ui.bar.addEventListener('pointerdown', (e) => {
-      if (!e.composedPath().includes(ui.speedMenu.parentElement!)) this.closeMenu();
+      const path = e.composedPath();
+      if (!path.includes(ui.speedMenu.parentElement!)) ui.speedMenu.classList.remove('open');
+      if (!path.includes(ui.downloadMenu.parentElement!) && !this.downloading) ui.downloadMenu.classList.remove('open');
     }, { ...opts, capture: true });
 
     this.bindScrubbing();
@@ -723,6 +759,119 @@ export class VideoController {
     }, 600);
   }
 
+  // ---------- download menu ----------
+
+  private media(): Promise<MediaItem | null> {
+    const ref = findMediaRef(this.video);
+    if (!ref) return Promise.resolve(null);
+    if (this.mediaCache?.pk !== ref.pk) this.mediaCache = { pk: ref.pk, item: resolveMedia(ref) };
+    return this.mediaCache.item;
+  }
+
+  private async toggleDownloadMenu(): Promise<void> {
+    const menu = this.ui.downloadMenu;
+    if (menu.classList.contains('open')) {
+      if (!this.downloading) menu.classList.remove('open');
+      return;
+    }
+    this.ui.speedMenu.classList.remove('open');
+    menu.classList.add('open');
+    this.renderDownloadMenu(null, true);
+    const item = await this.media();
+    if (menu.classList.contains('open') && !this.downloading) this.renderDownloadMenu(item, false);
+  }
+
+  /** Lists what can be downloaded for this video; options needing media data appear once it's loaded. */
+  private renderDownloadMenu(item: MediaItem | null, loading: boolean): void {
+    const menu = this.ui.downloadMenu;
+    menu.replaceChildren();
+    const { video } = this;
+    const add = (title: string, note: string, action?: (setNote: (text: string) => void) => Promise<boolean>) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'menu-item';
+      row.setAttribute('role', 'menuitem');
+      const titleEl = document.createElement('span');
+      titleEl.textContent = title;
+      const noteEl = document.createElement('span');
+      noteEl.className = 'note';
+      noteEl.textContent = note;
+      row.append(titleEl, noteEl);
+      if (!action) row.setAttribute('aria-disabled', 'true');
+      else row.addEventListener('click', () => void this.runDownload(row, (text) => (noteEl.textContent = text), action));
+      menu.append(row);
+    };
+
+    const single = item && bestVideo(item, video.duration);
+    const dash = item && bestDash(item, video.duration);
+    if (single) {
+      add('Video with audio', [single.quality && `${single.quality}p`, 'one MP4'].filter(Boolean).join(' · '), async () =>
+        startDownload(single));
+    }
+    if (dash) {
+      const quality = `${Math.min(dash.video.width, dash.video.height)}p`;
+      // VP9/AV1 in MP4 plays in browsers and VLC but not in QuickTime.
+      const codec = /^(vp09|av01)/.test(dash.video.codecs) ? ` · ${dash.video.codecs.startsWith('av01') ? 'AV1' : 'VP9'}, not QuickTime` : '';
+      add('Best quality, merged', `${quality}${codec} · takes a moment`, (setNote) => this.downloadMerged(dash, quality, setNote));
+      add('Best quality, separate files', `${quality} video + audio track${codec}`, async () => {
+        const videoOk = await startDownload({ url: dash.video.url, filename: `${dash.baseName}_${quality}_video.mp4` });
+        const audioOk = await startDownload({ url: dash.audio.url, filename: `${dash.baseName}_audio.mp4` });
+        return videoOk && audioOk;
+      });
+    }
+    if (loading) add('Finding download options…', 'Asking Instagram for the original files');
+    else if (!single && !dash) add('No downloadable file found', 'Instagram didn’t return this video’s files');
+    add('Current frame', video.videoWidth ? `PNG · ${video.videoWidth}×${video.videoHeight}` : 'PNG', () => this.saveFrame());
+  }
+
+  private async runDownload(
+    row: HTMLButtonElement,
+    setNote: (text: string) => void,
+    action: (setNote: (text: string) => void) => Promise<boolean>,
+  ): Promise<void> {
+    if (this.downloading) return;
+    this.downloading = true;
+    row.setAttribute('aria-disabled', 'true');
+    setDownloadState(this.ui.downloadBtn, 'busy');
+    let ok = false;
+    try {
+      ok = await action(setNote);
+    } catch (error) {
+      debug('download failed', error);
+    }
+    this.downloading = false;
+    setNote(ok ? 'Saved to your downloads' : 'Download failed');
+    setDownloadState(this.ui.downloadBtn, ok ? 'done' : 'failed');
+    setTimeout(() => {
+      this.ui.downloadMenu.classList.remove('open');
+      setDownloadState(this.ui.downloadBtn, 'idle');
+    }, ok ? 1200 : 2500);
+  }
+
+  /** Downloads the best video and audio streams and merges them into one MP4 here. */
+  private async downloadMerged(dash: NonNullable<ReturnType<typeof bestDash>>, quality: string, setNote: (text: string) => void): Promise<boolean> {
+    const received = { video: 0, audio: 0 };
+    const totals = { video: 0, audio: 0 };
+    const report = () => {
+      const total = totals.video + totals.audio;
+      setNote(total ? `Downloading… ${Math.floor(((received.video + received.audio) / total) * 100)}%` : 'Downloading…');
+    };
+    report();
+    const [videoBytes, audioBytes] = await Promise.all(
+      (['video', 'audio'] as const).map((kind) =>
+        fetchBytes(dash[kind].url, (got, total) => {
+          received[kind] = got;
+          totals[kind] = total;
+          report();
+        }),
+      ),
+    );
+    setNote('Merging…');
+    await new Promise((resolve) => setTimeout(resolve)); // let the note paint
+    saveBlob(mergeTracks(videoBytes, audioBytes), `${dash.baseName}_${quality}.mp4`);
+    return true;
+  }
+
   // ---------- fullscreen ----------
 
   private onFullscreenChange(): void {
@@ -790,6 +939,7 @@ export class VideoController {
 
   private closeMenu(): void {
     this.ui.speedMenu.classList.remove('open');
+    if (!this.downloading) this.ui.downloadMenu.classList.remove('open');
   }
 
   private flash(text: string): void {

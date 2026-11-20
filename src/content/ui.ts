@@ -55,7 +55,7 @@ export function setDownloadState(button: HTMLButtonElement, state: 'busy' | 'don
   button.classList.toggle('busy', state === 'busy');
   button.classList.toggle('failed', state === 'failed');
   setIcon(button, state === 'done' ? 'done' : state === 'failed' ? 'failed' : 'download');
-  button.title = state === 'failed' ? 'Download unavailable' : 'Download (d)';
+  button.title = state === 'failed' ? 'Download unavailable' : button.getAttribute('aria-label') ?? 'Download';
 }
 
 export function iconButton(name: IconName, label: string, className = ''): HTMLButtonElement {
@@ -101,6 +101,8 @@ export interface ControlsUI {
   loopBtn: HTMLButtonElement;
   pipBtn: HTMLButtonElement;
   downloadBtn: HTMLButtonElement;
+  /** Filled with the available download options when opened. */
+  downloadMenu: HTMLDivElement;
   fsBtn: HTMLButtonElement;
 }
 
@@ -170,15 +172,19 @@ export function buildUI(): ControlsUI {
 
   const loopBtn = iconButton('loop', 'Loop (r)', 'toggle loop');
   const pipBtn = iconButton('pip', 'Picture-in-picture (p)', 'toggle pip');
-  const downloadBtn = iconButton('download', 'Download (d)', 'download');
+  const downloadBtn = iconButton('download', 'Download options', 'download');
+  const downloadMenu = el('div', 'menu download-menu');
+  downloadMenu.setAttribute('role', 'menu');
+  const downloadWrap = el('div', 'menu-wrap');
+  downloadWrap.append(downloadBtn, downloadMenu);
   const fsBtn = iconButton('fullscreen', 'Fullscreen (f)');
 
-  row.append(playBtn, backBtn, forwardBtn, time, spacer, volumeGroup, speedWrap, loopBtn, pipBtn, downloadBtn, fsBtn);
+  row.append(playBtn, backBtn, forwardBtn, time, spacer, volumeGroup, speedWrap, loopBtn, pipBtn, downloadWrap, fsBtn);
   bar.append(progress, row);
   wrap.append(catcher, osd, line, bar);
 
   return {
     wrap, osd, catcher, backBtn, forwardBtn, line, linePlayed, bar, progress, buffered, played, thumb, tip, playBtn, time, timeCurrent, timeDuration,
-    muteBtn, volume, volumeFill, speedBtn, speedMenu, speedItems, loopBtn, pipBtn, downloadBtn, fsBtn,
+    muteBtn, volume, volumeFill, speedBtn, speedMenu, speedItems, loopBtn, pipBtn, downloadBtn, downloadMenu, fsBtn,
   };
 }

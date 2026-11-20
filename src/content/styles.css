@@ -446,8 +446,39 @@
 
 /* ---------- speed menu ---------- */
 
-.speed-wrap {
+.speed-wrap,
+.menu-wrap {
   position: relative;
+}
+
+/* .menu.download-menu: must beat the generic .menu sizing defined further down. */
+.menu.download-menu {
+  width: max-content;
+  min-width: 220px;
+  max-width: 300px;
+}
+
+.download-menu .menu-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  line-height: 1.2;
+}
+
+.download-menu .note {
+  font-weight: 400;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.download-menu .menu-item[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.download-menu .menu-item[aria-disabled='true']:hover {
+  background: none;
 }
 
 .btn.speed {

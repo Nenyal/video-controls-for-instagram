@@ -24,6 +24,8 @@ export interface MediaItem {
   user?: { username?: string };
   video_duration?: number;
   video_versions?: Version[];
+  /** DASH manifest (XML) listing the separate video and audio streams, including ones above the MP4s' quality. */
+  video_dash_manifest?: string;
   image_versions2?: { candidates?: Version[] };
   carousel_media?: MediaItem[];
 }
@@ -36,6 +38,24 @@ export interface MediaRef {
 export interface Download {
   url: string;
   filename: string;
+  /** Shorter side in pixels (e.g. 720 for 720×1280), when known. */
+  quality?: number;
+}
+
+/** One stream from the DASH manifest. */
+export interface DashStream {
+  url: string;
+  width: number;
+  height: number;
+  bandwidth: number;
+  codecs: string;
+}
+
+/** The best separate video and audio streams, and the file name to save them under. */
+export interface DashPair {
+  video: DashStream;
+  audio: DashStream;
+  baseName: string;
 }
 
 /** Instagram shortcodes are the media id in base64 (with its own alphabet). */
@@ -121,15 +141,54 @@ function findItem(root: unknown, ref: MediaRef): MediaItem | null {
 const largest = (versions: Version[] | undefined) =>
   [...(versions ?? [])].sort((a, b) => (b.width * b.height || 0) - (a.width * a.height || 0))[0];
 
-/** The best video file; in a carousel, the video whose length matches the one playing. */
-export function bestVideo(item: MediaItem, duration: number): Download | null {
+/** The video being played; in a carousel, the slide whose length matches it. */
+function videoSlide(item: MediaItem, duration: number): MediaItem | undefined {
   const videos = item.carousel_media?.filter((m) => m.video_versions?.length) ?? [item];
-  const pick = Number.isFinite(duration)
+  return Number.isFinite(duration)
     ? [...videos].sort((a, b) => Math.abs((a.video_duration ?? 0) - duration) - Math.abs((b.video_duration ?? 0) - duration))[0]
     : videos[0];
+}
+
+/** The best single MP4 with audio. */
+export function bestVideo(item: MediaItem, duration: number): Download | null {
+  const pick = videoSlide(item, duration);
   const version = largest(pick?.video_versions);
-  if (!version) return null;
-  return { url: version.url, filename: filename(item, pick, version.url, 'mp4') };
+  if (!pick || !version) return null;
+  const quality = Math.min(version.width, version.height) || undefined;
+  return { url: version.url, filename: `${baseName(item, pick)}.${extension(version.url, 'mp4')}`, quality };
+}
+
+/** The highest-quality video stream and the best audio stream from the DASH manifest. */
+export function bestDash(item: MediaItem, duration: number): DashPair | null {
+  const pick = videoSlide(item, duration);
+  const mpd = pick?.video_dash_manifest;
+  if (!pick || !mpd) return null;
+  const video: DashStream[] = [];
+  const audio: DashStream[] = [];
+  for (const [, setAttrs, setBody] of mpd.matchAll(/<AdaptationSet([^>]*)>([\s\S]*?)<\/AdaptationSet>/g)) {
+    for (const [, attrs, body] of setBody.matchAll(/<Representation([^>]*)>([\s\S]*?)<\/Representation>/g)) {
+      const attr = (name: string) => attrs.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1] ?? setAttrs.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1] ?? '';
+      const url = body.match(/<BaseURL>([^<]*)<\/BaseURL>/)?.[1];
+      if (!url) continue;
+      const stream = {
+        url: decodeXml(url),
+        width: Number(attr('width')) || 0,
+        height: Number(attr('height')) || 0,
+        bandwidth: Number(attr('bandwidth')) || 0,
+        codecs: attr('codecs'),
+      };
+      const kind = `${attr('mimeType')} ${attr('contentType')}`;
+      (kind.includes('audio') ? audio : kind.includes('video') ? video : []).push(stream);
+    }
+  }
+  const bestVideoStream = video.sort((a, b) => b.width * b.height - a.width * a.height || b.bandwidth - a.bandwidth)[0];
+  const bestAudioStream = audio.sort((a, b) => b.bandwidth - a.bandwidth)[0];
+  if (!bestVideoStream || !bestAudioStream) return null;
+  return { video: bestVideoStream, audio: bestAudioStream, baseName: baseName(item, pick) };
+}
+
+function decodeXml(text: string): string {
+  return text.replace(/&(amp|lt|gt|quot|apos);/g, (_, e: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" })[e]!);
 }
 
 /** The largest image; in a carousel, the slide whose file matches the one displayed. */
@@ -141,7 +200,7 @@ export function bestImage(item: MediaItem, displayedSrc: string): Download | nul
     (slides.length === 1 ? slides[0] : null);
   const version = largest(pick?.image_versions2?.candidates);
   if (!pick || !version) return null;
-  return { url: version.url, filename: filename(item, pick, version.url, 'jpg') };
+  return { url: version.url, filename: `${baseName(item, pick)}.${extension(version.url, 'jpg')}` };
 }
 
 /** Fallback without media data: the largest size the page itself offers in srcset. */
@@ -169,12 +228,47 @@ function extension(url: string, fallback: string): string {
   return fileKey(url).match(/\.(\w+)$/)?.[1] ?? fallback;
 }
 
-function filename(item: MediaItem, pick: MediaItem, url: string, fallbackExt: string): string {
+/** user_postcode, plus the slide number in carousels. */
+function baseName(item: MediaItem, pick: MediaItem): string {
   const user = item.user?.username ?? 'instagram';
   const id = item.code ?? String(item.pk ?? pick.pk ?? 'media');
   const slides = item.carousel_media;
   const slide = slides && slides.length > 1 ? `_${slides.indexOf(pick) + 1}` : '';
-  return `${user}_${id}${slide}.${extension(url, fallbackExt)}`.replace(/[^\w.-]/g, '_');
+  return `${user}_${id}${slide}`.replace(/[^\w.-]/g, '_');
+}
+
+/** Downloads a file into memory, reporting bytes received. */
+export async function fetchBytes(url: string, onProgress: (received: number, total: number) => void): Promise<Uint8Array> {
+  const res = await fetch(url);
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+  const total = Number(res.headers.get('content-length')) || 0;
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    onProgress(received, total);
+  }
+  const out = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
+/** Saves a file generated here (merged video, frame). Blob URLs are same-origin, so <a download> works. */
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 /** Hands the file to the background worker, which saves it with chrome.downloads (CDN files are cross-origin). */
