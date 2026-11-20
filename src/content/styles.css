@@ -149,21 +149,32 @@
 }
 
 .wrap.side .spacer,
-.wrap.side .volume,
+.wrap.side .time,
 .wrap.side .osd,
 .wrap.side .line,
-.wrap.side .catcher,
-.wrap.side .time .sep {
+.wrap.side .catcher {
   display: none;
 }
 
-.wrap.side .time {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 5px 0;
-  font-size: 10px;
+/* Volume slides out to the left of the pill, over the story, while hovering the mute button. */
+.wrap.side .volume-group {
+  position: relative;
+}
+
+.wrap.side .volume {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  height: 32px;
+  border-radius: 16px;
+  background: rgb(0 0 0 / 0.65);
+  transform: translateY(-50%);
+}
+
+.wrap.side .volume-group:hover .volume,
+.wrap.side .volume.dragging {
+  width: 96px;
+  padding: 0 12px;
 }
 
 .wrap.side .progress {

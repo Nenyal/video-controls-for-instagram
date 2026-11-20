@@ -21,7 +21,7 @@ const SIDE_INSET = 8;
 const SIDE_MARGIN_Y = 80;
 const SIDE_MAX_HEIGHT = 520;
 /** Height of everything in the expanded pill except its progress bar. */
-const SIDE_CONTROLS_HEIGHT = 340;
+const SIDE_CONTROLS_HEIGHT = 300;
 /** How long after a click on Instagram's UI a mute change still counts as the user's doing. */
 const USER_CLICK_WINDOW = 600;
 /** Auto-next triggers this close to the end, before Instagram gets a chance to loop. */
