@@ -15,6 +15,9 @@ const MIN_WIDTH = 140;
 const MIN_HEIGHT = 100;
 const OCCLUSION_INTERVAL = 250;
 const BAR_HEIGHT = 74;
+/** Height of the bar when it sits below a story instead of over it, and its gap to the story. */
+const BELOW_BAR_HEIGHT = 56;
+const BELOW_GAP = 6;
 /** How long after a click on Instagram's UI a mute change still counts as the user's doing. */
 const USER_CLICK_WINDOW = 600;
 /** Auto-next triggers this close to the end, before Instagram gets a chance to loop. */
@@ -76,7 +79,9 @@ export class VideoController {
   private occluded = false;
   /** Hover-preview tile in a grid (explore, profile): no controls. Null until it can be measured. */
   private gridTile: boolean | null;
-  /** Space kept free at the bottom for Instagram's own controls (story reply box, like, share). */
+  /** Stories: the card holding the story; the bar sits below it (shrinking it to make room if needed). */
+  private storyCard: HTMLElement | null = null;
+  /** Fallback when there's no story card: space kept free for Instagram's own controls over the video. */
   private bottomInset = 0;
 
   private lastActivity = 0;
@@ -137,6 +142,8 @@ export class VideoController {
 
   destroy(): void {
     if (this.fsTarget && document.fullscreenElement === this.fsTarget) void document.exitFullscreen();
+    // The next story's video usually reuses the card, so keep its size while still on stories.
+    if (this.storyCard && (!isStoriesPage() || !this.storyCard.isConnected)) setCardScale(this.storyCard, 1);
     this.restoreFullscreenStyles();
     this.ac.abort();
     clearTimeout(this.osdTimer);
@@ -169,9 +176,11 @@ export class VideoController {
     const r = isFs ? new DOMRect(0, 0, window.innerWidth, window.innerHeight) : this.video.getBoundingClientRect();
     if (!isFs && now - this.lastOcclusionCheck > OCCLUSION_INTERVAL) {
       this.lastOcclusionCheck = now;
-      this.bottomInset = this.computeBottomInset(r);
+      this.updateStoryCard(r);
+      this.bottomInset = this.storyCard ? 0 : this.computeBottomInset(r);
       this.occluded = this.checkOccluded(r, Math.min(r.bottom - this.bottomInset, window.innerHeight));
     }
+    const below = !isFs && this.storyCard !== null;
     // Clamp to the viewport so the bar sits at the visible bottom of tall or partly scrolled videos.
     const top = Math.max(r.top, 0);
     const bottom = Math.min(r.bottom - (isFs ? 0 : this.bottomInset), window.innerHeight);
@@ -195,14 +204,22 @@ export class VideoController {
     this.rect = r;
     const s = this.host.style;
     s.left = `${r.left}px`;
-    s.top = `${top}px`;
     s.width = `${r.width}px`;
-    s.height = `${visibleHeight}px`;
-    this.ui.speedMenu.style.setProperty('--menu-max', `${Math.max(120, visibleHeight - BAR_HEIGHT)}px`);
+    if (below) {
+      s.top = `${this.storyCard!.getBoundingClientRect().bottom + BELOW_GAP}px`;
+      s.height = `${BELOW_BAR_HEIGHT}px`;
+      this.ui.speedMenu.style.setProperty('--menu-max', `${Math.max(120, visibleHeight * 0.7)}px`);
+    } else {
+      s.top = `${top}px`;
+      s.height = `${visibleHeight}px`;
+      this.ui.speedMenu.style.setProperty('--menu-max', `${Math.max(120, visibleHeight - BAR_HEIGHT)}px`);
+    }
+    this.ui.wrap.classList.toggle('below', below);
 
     const menuOpen = this.ui.speedMenu.classList.contains('open');
+    // Below a story the bar covers nothing, so it never needs to hide.
     const active =
-      this.scrubbing || this.draggingVolume || this.barHovered || menuOpen ||
+      below || this.scrubbing || this.draggingVolume || this.barHovered || menuOpen ||
       this.video.paused || now - this.lastActivity < HIDE_DELAY;
     this.ui.wrap.classList.toggle('idle', !active);
     this.ui.wrap.classList.toggle('stories', isStoriesPage());
@@ -372,6 +389,28 @@ export class VideoController {
       return mode === 'next' && this.isFullscreen ? 'loop' : mode;
     }
     return this.loopOverride === null ? null : this.loopOverride ? 'loop' : 'stop';
+  }
+
+  /**
+   * Stories: finds the story card and scales it down from its top edge just enough for the bar to
+   * fit underneath. Leaves storyCard null when there's no card, or off stories (restoring its size).
+   */
+  private updateStoryCard(r: DOMRect): void {
+    if (!isStoriesPage()) {
+      if (this.storyCard) setCardScale(this.storyCard, 1);
+      this.storyCard = null;
+      return;
+    }
+    if (!this.storyCard?.isConnected) this.storyCard = findStoryCard(this.video, r);
+    const card = this.storyCard;
+    if (!card) return;
+    const scale = cardScale(card);
+    const b = card.getBoundingClientRect();
+    const naturalHeight = b.height / scale;
+    const room = window.innerHeight - (b.top + naturalHeight);
+    const needed = BELOW_BAR_HEIGHT + BELOW_GAP * 2 - room;
+    const next = needed > 0 ? Math.max(0.6, 1 - needed / naturalHeight) : 1;
+    if (Math.abs(next - scale) > 0.002) setCardScale(card, next);
   }
 
   /**
@@ -851,6 +890,43 @@ export class VideoController {
     button.title = `At end: ${END_LABELS[mode].toLowerCase()} (r)`;
     button.setAttribute('aria-label', button.title);
   }
+}
+
+/** Original inline transform of story cards we've scaled, to restore them. */
+const cardTransforms = new WeakMap<HTMLElement, string>();
+
+function cardScale(card: HTMLElement): number {
+  return Number(card.dataset.ivcScale ?? 1);
+}
+
+function setCardScale(card: HTMLElement, scale: number): void {
+  if (!cardTransforms.has(card)) cardTransforms.set(card, card.style.transform);
+  if (scale === 1) {
+    card.style.transform = cardTransforms.get(card)!;
+    card.style.transformOrigin = '';
+    delete card.dataset.ivcScale;
+  } else {
+    card.style.transformOrigin = 'top center';
+    card.style.transform = `scale(${scale})`;
+    card.dataset.ivcScale = String(scale);
+  }
+}
+
+/**
+ * The story card: the outermost ancestor that is still about the video's size (it also holds the
+ * header and reply box). A card we already scaled is found by its marker, since its unscaled parent
+ * would otherwise look like a match too.
+ */
+function findStoryCard(video: HTMLVideoElement, r: DOMRect): HTMLElement | null {
+  const marked = video.closest<HTMLElement>('[data-ivc-scale]');
+  if (marked) return marked;
+  let card: HTMLElement | null = null;
+  for (let el = video.parentElement, depth = 0; el && el !== document.body && depth < 12; el = el.parentElement, depth++) {
+    const b = el.getBoundingClientRect();
+    if (Math.abs(b.width - r.width) > r.width * 0.15 || Math.abs(b.height - r.height) > r.height * 0.15) break;
+    card = el;
+  }
+  return card;
 }
 
 /**
