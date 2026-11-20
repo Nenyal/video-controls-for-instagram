@@ -18,4 +18,4 @@ This extension does not collect, store, transmit, sell or share any personal dat
 - It contains no analytics, tracking, advertising or remote code.
 - It does not read or store your messages, account details or browsing history.
 
-Questions: open an issue on the project's repository.
+Questions: open an issue at https://github.com/Nenyal/video-controls-for-instagram/issues.

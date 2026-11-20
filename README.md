@@ -65,6 +65,10 @@ The extension collects nothing and talks to no server of its own. It only runs o
 reads media data from Instagram's own web API with your existing session, and saves files you ask for to
 your downloads folder. Settings are stored with `chrome.storage.sync`. See [PRIVACY.md](PRIVACY.md).
 
+## License
+
+[MIT](LICENSE)
+
 ## Development
 
 ```sh
