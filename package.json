@@ -1,0 +1,19 @@
+{
+  "name": "instagram-video-controls",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Adds a full video control bar to Instagram reels, stories and feed videos.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "typecheck": "tsc",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^3.0.0",
+    "@types/chrome": "^0.3.7",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}
