@@ -119,7 +119,7 @@ export class VideoController {
   private lastTimeText = '';
   private lastPaused: boolean | null = null;
   /** Media data for the current video, fetched once per source. */
-  private mediaCache: { pk: string; item: Promise<MediaItem | null> } | null = null;
+  private mediaCache: { key: string; item: Promise<MediaItem | null> } | null = null;
   private downloading = false;
   private lastEndMode = '';
 
@@ -379,8 +379,9 @@ export class VideoController {
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
       if (!blob) throw new Error('Encoding failed');
       const ref = findMediaRef(video);
-      const user = (await this.mediaCache?.item)?.user?.username;
-      const name = [user, ref?.code ?? ref?.pk ?? 'instagram', `${video.currentTime.toFixed(2)}s`].filter(Boolean).join('_');
+      const item = await this.mediaCache?.item;
+      const id = item?.code ?? item?.pk ?? ref?.code ?? ref?.pk ?? 'instagram';
+      const name = [item?.user?.username, id, `${video.currentTime.toFixed(2)}s`].filter(Boolean).join('_');
       saveBlob(blob, `${name}.png`);
       this.flash('Frame saved');
       return true;
@@ -764,7 +765,15 @@ export class VideoController {
   private media(): Promise<MediaItem | null> {
     const ref = findMediaRef(this.video);
     if (!ref) return Promise.resolve(null);
-    if (this.mediaCache?.pk !== ref.pk) this.mediaCache = { pk: ref.pk, item: resolveMedia(ref) };
+    // Stories opened directly have no item id in the URL; a new story item is a new source (loadstart clears this).
+    const key = ref.pk ?? ref.code ?? location.pathname;
+    if (this.mediaCache?.key !== key) {
+      const item = resolveMedia(ref, { duration: this.video.duration }).then((found) => {
+        if (!found && this.mediaCache?.item === item) this.mediaCache = null; // retry next time
+        return found;
+      });
+      this.mediaCache = { key, item };
+    }
     return this.mediaCache.item;
   }
 

@@ -31,8 +31,16 @@ export interface MediaItem {
 }
 
 export interface MediaRef {
-  pk: string;
+  pk?: string;
   code?: string;
+  /** The story or highlight being viewed. Its URL often lacks the item id, so the item is picked out of the whole reel. */
+  story?: { username?: string; highlight?: string };
+}
+
+/** What's on screen, to pick the right item out of a story reel when there's no id. */
+export interface MediaHint {
+  duration?: number;
+  src?: string;
 }
 
 export interface Download {
@@ -67,8 +75,11 @@ export function shortcodeToPk(code: string): string {
 
 /** Which post, reel or story an element on the page belongs to. */
 export function findMediaRef(el: Element): MediaRef | null {
-  const story = location.pathname.match(/^\/stories\/[^/]+\/(\d+)/);
-  if (story) return { pk: story[1] };
+  const highlight = location.pathname.match(/^\/stories\/highlights\/(\d+)(?:\/(\d+))?/);
+  if (highlight) return { pk: highlight[2], story: { highlight: highlight[1] } };
+  // /stories/<user>/<item id>/, or just /stories/<user>/ when a story is opened directly.
+  const story = location.pathname.match(/^\/stories\/([^/]+)(?:\/(\d+))?/);
+  if (story) return { pk: story[2], story: { username: story[1] } };
   const code = shortcodeNear(el) ?? postCodeFromHref(location.pathname);
   return code ? { pk: shortcodeToPk(code), code } : null;
 }
@@ -92,27 +103,73 @@ function shortcodeNear(el: Element): string | null {
   return null;
 }
 
-export async function resolveMedia(ref: MediaRef): Promise<MediaItem | null> {
-  try {
-    const res = await fetch(`/api/v1/media/${ref.pk}/info/`, {
-      credentials: 'include',
-      headers: { 'X-IG-App-ID': APP_ID },
-    });
-    if (res.ok && res.headers.get('content-type')?.includes('json')) {
-      const item = (await res.json())?.items?.[0] as MediaItem | undefined;
-      if (item) return item;
-    }
-  } catch {
-    // Fall through to the embedded data.
+export async function resolveMedia(ref: MediaRef, hint: MediaHint = {}): Promise<MediaItem | null> {
+  if (ref.pk) {
+    const info = (await apiJson(`/api/v1/media/${ref.pk}/info/`)) as { items?: MediaItem[] } | null;
+    if (info?.items?.[0]) return info.items[0];
+  }
+  if (ref.story) {
+    const item = await storyItem(ref, hint);
+    if (item) return item;
   }
   return findEmbedded(ref);
 }
 
+/** GET from Instagram's web API with the session cookies; null unless it answers with JSON. */
+async function apiJson(path: string): Promise<unknown> {
+  try {
+    const res = await fetch(path, { credentials: 'include', headers: { 'X-IG-App-ID': APP_ID } });
+    if (res.ok && res.headers.get('content-type')?.includes('json')) return await res.json();
+  } catch {
+    // Network error: treat as unavailable.
+  }
+  return null;
+}
+
+/** Loads the whole story reel (a user's stories or a highlight) and picks the item on screen. */
+async function storyItem(ref: MediaRef, hint: MediaHint): Promise<MediaItem | null> {
+  const { username, highlight } = ref.story!;
+  let reelId = highlight ? `highlight:${highlight}` : null;
+  if (!reelId && username) {
+    const profile = (await apiJson(`/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`)) as
+      | { data?: { user?: { id?: string } } }
+      | null;
+    reelId = profile?.data?.user?.id ?? null;
+  }
+  if (!reelId) return null;
+  const data = (await apiJson(`/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(reelId)}`)) as {
+    reels?: Record<string, { items?: MediaItem[] }>;
+    reels_media?: { items?: MediaItem[] }[];
+  } | null;
+  return matchItem(data?.reels?.[reelId]?.items ?? data?.reels_media?.[0]?.items ?? [], ref, hint);
+}
+
+/** The reel item on screen: by id when known, else by image file name or video length. */
+function matchItem(items: MediaItem[], ref: MediaRef, hint: MediaHint): MediaItem | null {
+  if (ref.pk) {
+    const exact = items.find((i) => String(i.pk) === ref.pk || i.id?.startsWith(`${ref.pk}_`));
+    if (exact) return exact;
+  }
+  if (hint.src) {
+    const key = fileKey(hint.src);
+    const byFile = items.find((i) => i.image_versions2?.candidates?.some((c) => fileKey(c.url) === key));
+    if (byFile) return byFile;
+  }
+  const duration = hint.duration;
+  if (duration !== undefined && Number.isFinite(duration)) {
+    const distance = (i: MediaItem) => Math.abs((i.video_duration ?? Infinity) - duration);
+    const closest = items.filter((i) => i.video_versions?.length).sort((a, b) => distance(a) - distance(b))[0];
+    if (closest && distance(closest) < 1.5) return closest;
+  }
+  return null;
+}
+
 /** Searches the JSON Instagram embeds in the page for the media. */
 function findEmbedded(ref: MediaRef): MediaItem | null {
+  if (!ref.pk && !ref.code) return null;
   for (const script of document.querySelectorAll('script[type="application/json"]')) {
     const text = script.textContent ?? '';
-    if (!text.includes(ref.pk) && !(ref.code && text.includes(ref.code))) continue;
+    if (!(ref.pk && text.includes(ref.pk)) && !(ref.code && text.includes(ref.code))) continue;
     try {
       const found = findItem(JSON.parse(text), ref);
       if (found) return found;

@@ -66,7 +66,7 @@ export function installImageDownloads(signal: AbortSignal): void {
     if (!img || button.classList.contains('busy')) return;
     setDownloadState(button, 'busy');
     const ref = findMediaRef(img);
-    const item = ref && (await resolveMedia(ref));
+    const item = ref && (await resolveMedia(ref, { src: img.currentSrc || img.src }));
     const file = (item && bestImage(item, img.currentSrc || img.src)) ?? largestFromSrcset(img);
     const ok = !!file && (await startDownload(file));
     setDownloadState(button, ok ? 'done' : 'failed');
