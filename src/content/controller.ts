@@ -15,9 +15,9 @@ const MIN_WIDTH = 140;
 const MIN_HEIGHT = 100;
 const OCCLUSION_INTERVAL = 250;
 const BAR_HEIGHT = 74;
-/** Height of the bar when it sits below a story instead of over it, and its gap to the story. */
-const BELOW_BAR_HEIGHT = 56;
-const BELOW_GAP = 6;
+/** Width of the vertical panel shown beside a story, and its gap to whatever it sits next to. */
+const SIDE_WIDTH = 44;
+const SIDE_GAP = 10;
 /** How long after a click on Instagram's UI a mute change still counts as the user's doing. */
 const USER_CLICK_WINDOW = 600;
 /** Auto-next triggers this close to the end, before Instagram gets a chance to loop. */
@@ -79,8 +79,9 @@ export class VideoController {
   private occluded = false;
   /** Hover-preview tile in a grid (explore, profile): no controls. Null until it can be measured. */
   private gridTile: boolean | null;
-  /** Stories: the card holding the story; the bar sits below it (shrinking it to make room if needed). */
+  /** Stories: the card holding the story, with the panel this far right of the card's edge. */
   private storyCard: HTMLElement | null = null;
+  private sideOffset: number | null = null;
   /** Fallback when there's no story card: space kept free for Instagram's own controls over the video. */
   private bottomInset = 0;
 
@@ -142,8 +143,6 @@ export class VideoController {
 
   destroy(): void {
     if (this.fsTarget && document.fullscreenElement === this.fsTarget) void document.exitFullscreen();
-    // The next story's video usually reuses the card, so keep its size while still on stories.
-    if (this.storyCard && (!isStoriesPage() || !this.storyCard.isConnected)) setCardScale(this.storyCard, 1);
     this.restoreFullscreenStyles();
     this.ac.abort();
     clearTimeout(this.osdTimer);
@@ -176,11 +175,11 @@ export class VideoController {
     const r = isFs ? new DOMRect(0, 0, window.innerWidth, window.innerHeight) : this.video.getBoundingClientRect();
     if (!isFs && now - this.lastOcclusionCheck > OCCLUSION_INTERVAL) {
       this.lastOcclusionCheck = now;
-      this.updateStoryCard(r);
-      this.bottomInset = this.storyCard ? 0 : this.computeBottomInset(r);
+      this.updateSidePanel(r);
+      this.bottomInset = this.sideOffset !== null ? 0 : this.computeBottomInset(r);
       this.occluded = this.checkOccluded(r, Math.min(r.bottom - this.bottomInset, window.innerHeight));
     }
-    const below = !isFs && this.storyCard !== null;
+    const side = !isFs && this.storyCard !== null && this.sideOffset !== null;
     // Clamp to the viewport so the bar sits at the visible bottom of tall or partly scrolled videos.
     const top = Math.max(r.top, 0);
     const bottom = Math.min(r.bottom - (isFs ? 0 : this.bottomInset), window.innerHeight);
@@ -203,23 +202,26 @@ export class VideoController {
 
     this.rect = r;
     const s = this.host.style;
-    s.left = `${r.left}px`;
-    s.width = `${r.width}px`;
-    if (below) {
-      s.top = `${this.storyCard!.getBoundingClientRect().bottom + BELOW_GAP}px`;
-      s.height = `${BELOW_BAR_HEIGHT}px`;
-      this.ui.speedMenu.style.setProperty('--menu-max', `${Math.max(120, visibleHeight * 0.7)}px`);
+    if (side) {
+      const card = this.storyCard!.getBoundingClientRect();
+      s.left = `${card.right + this.sideOffset!}px`;
+      s.top = `${card.top}px`;
+      s.width = `${SIDE_WIDTH}px`;
+      s.height = `${card.height}px`;
+      this.ui.speedMenu.style.setProperty('--menu-max', `${Math.max(120, card.height * 0.8)}px`);
     } else {
+      s.left = `${r.left}px`;
       s.top = `${top}px`;
+      s.width = `${r.width}px`;
       s.height = `${visibleHeight}px`;
       this.ui.speedMenu.style.setProperty('--menu-max', `${Math.max(120, visibleHeight - BAR_HEIGHT)}px`);
     }
-    this.ui.wrap.classList.toggle('below', below);
+    this.ui.wrap.classList.toggle('side', side);
 
     const menuOpen = this.ui.speedMenu.classList.contains('open');
-    // Below a story the bar covers nothing, so it never needs to hide.
+    // Beside a story the panel covers nothing, so it never needs to hide.
     const active =
-      below || this.scrubbing || this.draggingVolume || this.barHovered || menuOpen ||
+      side || this.scrubbing || this.draggingVolume || this.barHovered || menuOpen ||
       this.video.paused || now - this.lastActivity < HIDE_DELAY;
     this.ui.wrap.classList.toggle('idle', !active);
     this.ui.wrap.classList.toggle('stories', isStoriesPage());
@@ -392,25 +394,32 @@ export class VideoController {
   }
 
   /**
-   * Stories: finds the story card and scales it down from its top edge just enough for the bar to
-   * fit underneath. Leaves storyCard null when there's no card, or off stories (restoring its size).
+   * Stories: finds the story card and a free spot for the vertical panel to its right, stepping past
+   * Instagram's own small controls there (e.g. the next-story arrow). sideOffset stays null when there's
+   * no card or no room, and the bar falls back to sitting over the story.
    */
-  private updateStoryCard(r: DOMRect): void {
+  private updateSidePanel(r: DOMRect): void {
+    this.sideOffset = null;
     if (!isStoriesPage()) {
-      if (this.storyCard) setCardScale(this.storyCard, 1);
       this.storyCard = null;
       return;
     }
     if (!this.storyCard?.isConnected) this.storyCard = findStoryCard(this.video, r);
-    const card = this.storyCard;
-    if (!card) return;
-    const scale = cardScale(card);
-    const b = card.getBoundingClientRect();
-    const naturalHeight = b.height / scale;
-    const room = window.innerHeight - (b.top + naturalHeight);
-    const needed = BELOW_BAR_HEIGHT + BELOW_GAP * 2 - room;
-    const next = needed > 0 ? Math.max(0.6, 1 - needed / naturalHeight) : 1;
-    if (Math.abs(next - scale) > 0.002) setCardScale(card, next);
+    if (!this.storyCard) return;
+    const card = this.storyCard.getBoundingClientRect();
+    const obstacles: DOMRect[] = [];
+    for (const el of document.querySelectorAll('button, [role="button"], a[href]')) {
+      const b = el.getBoundingClientRect();
+      const small = b.width > 0 && b.height > 0 && b.width <= 120;
+      if (small && b.bottom > card.top && b.top < card.bottom && b.left >= card.right - 1) obstacles.push(b);
+    }
+    let x = card.right + SIDE_GAP;
+    for (let pass = 0; pass < 5; pass++) {
+      const hit = obstacles.find((b) => b.left < x + SIDE_WIDTH && b.right > x);
+      if (!hit) break;
+      x = hit.right + SIDE_GAP;
+    }
+    if (x + SIDE_WIDTH <= window.innerWidth) this.sideOffset = x - card.right;
   }
 
   /**
@@ -551,9 +560,12 @@ export class VideoController {
   private bindScrubbing(): void {
     const { progress, tip } = this.ui;
     const opts = { signal: this.ac.signal };
-    const fractionAt = (clientX: number) => {
+    // The progress bar runs top-to-bottom in the stories side panel.
+    const vertical = () => this.ui.wrap.classList.contains('side');
+    const fractionAt = (e: PointerEvent) => {
       const r = progress.getBoundingClientRect();
-      return Math.min(Math.max((clientX - r.left) / r.width, 0), 1);
+      const f = vertical() ? (e.clientY - r.top) / r.height : (e.clientX - r.left) / r.width;
+      return Math.min(Math.max(f, 0), 1);
     };
 
     // Seek without pausing: Instagram reacts to pause/play events (e.g. re-applying its own mute state).
@@ -562,14 +574,17 @@ export class VideoController {
       progress.setPointerCapture(e.pointerId);
       this.scrubbing = true;
       progress.classList.add('scrubbing');
-      this.scrubFraction = fractionAt(e.clientX);
+      this.scrubFraction = fractionAt(e);
       this.seekTo(this.scrubFraction * this.video.duration);
     }, opts);
 
     progress.addEventListener('pointermove', (e) => {
-      const fraction = fractionAt(e.clientX);
+      const fraction = fractionAt(e);
       tip.textContent = formatTime(fraction * this.video.duration);
-      tip.style.left = `${clampTipX(fraction * progress.clientWidth, tip.offsetWidth, progress.clientWidth)}px`;
+      const [length, tipSize] = vertical()
+        ? [progress.clientHeight, tip.offsetHeight]
+        : [progress.clientWidth, tip.offsetWidth];
+      tip.style.setProperty('--tip', `${clampTip(fraction * length, tipSize, length)}px`);
       if (!this.scrubbing) return;
       this.scrubFraction = fraction;
       this.seekTo(fraction * this.video.duration);
@@ -838,19 +853,20 @@ export class VideoController {
     }
     const bufferedFraction = Number.isFinite(d) && d > 0 ? Math.min(bufferedEnd / d, 1) : 0;
 
-    ui.played.style.transform = `scaleX(${fraction})`;
-    ui.linePlayed.style.transform = `scaleX(${fraction})`;
-    ui.buffered.style.transform = `scaleX(${bufferedFraction})`;
-    ui.thumb.style.left = `${fraction * 100}%`;
+    // The stylesheet maps these onto the horizontal bar, the idle line, or the vertical side panel.
+    ui.wrap.style.setProperty('--played', String(fraction));
+    ui.wrap.style.setProperty('--buffered', String(bufferedFraction));
     ui.progress.setAttribute('aria-valuenow', String(Math.round(fraction * 100)));
   }
 
   private renderTime(): void {
     const current = this.scrubbing ? this.scrubFraction * this.video.duration : this.video.currentTime;
-    const text = `${formatTime(current)} / ${formatTime(this.video.duration)}`;
-    if (text !== this.lastTimeText) {
-      this.lastTimeText = text;
-      this.ui.time.textContent = text;
+    const currentText = formatTime(current);
+    const durationText = formatTime(this.video.duration);
+    if (currentText + durationText !== this.lastTimeText) {
+      this.lastTimeText = currentText + durationText;
+      this.ui.timeCurrent.textContent = currentText;
+      this.ui.timeDuration.textContent = durationText;
     }
   }
 
@@ -892,34 +908,8 @@ export class VideoController {
   }
 }
 
-/** Original inline transform of story cards we've scaled, to restore them. */
-const cardTransforms = new WeakMap<HTMLElement, string>();
-
-function cardScale(card: HTMLElement): number {
-  return Number(card.dataset.ivcScale ?? 1);
-}
-
-function setCardScale(card: HTMLElement, scale: number): void {
-  if (!cardTransforms.has(card)) cardTransforms.set(card, card.style.transform);
-  if (scale === 1) {
-    card.style.transform = cardTransforms.get(card)!;
-    card.style.transformOrigin = '';
-    delete card.dataset.ivcScale;
-  } else {
-    card.style.transformOrigin = 'top center';
-    card.style.transform = `scale(${scale})`;
-    card.dataset.ivcScale = String(scale);
-  }
-}
-
-/**
- * The story card: the outermost ancestor that is still about the video's size (it also holds the
- * header and reply box). A card we already scaled is found by its marker, since its unscaled parent
- * would otherwise look like a match too.
- */
+/** The story card: the outermost ancestor that is still about the video's size (with header and reply box). */
 function findStoryCard(video: HTMLVideoElement, r: DOMRect): HTMLElement | null {
-  const marked = video.closest<HTMLElement>('[data-ivc-scale]');
-  if (marked) return marked;
   let card: HTMLElement | null = null;
   for (let el = video.parentElement, depth = 0; el && el !== document.body && depth < 12; el = el.parentElement, depth++) {
     const b = el.getBoundingClientRect();
@@ -990,7 +980,7 @@ function goNext(video: HTMLVideoElement): void {
   }
 }
 
-function clampTipX(x: number, tipWidth: number, trackWidth: number): number {
-  const half = tipWidth / 2;
-  return Math.min(Math.max(x, half), trackWidth - half);
+function clampTip(position: number, tipSize: number, trackLength: number): number {
+  const half = tipSize / 2;
+  return Math.min(Math.max(position, half), trackLength - half);
 }

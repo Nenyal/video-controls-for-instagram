@@ -78,6 +78,8 @@ export interface ControlsUI {
   tip: HTMLDivElement;
   playBtn: HTMLButtonElement;
   time: HTMLSpanElement;
+  timeCurrent: HTMLSpanElement;
+  timeDuration: HTMLSpanElement;
   muteBtn: HTMLButtonElement;
   volume: HTMLDivElement;
   volumeFill: HTMLDivElement;
@@ -119,6 +121,11 @@ export function buildUI(): ControlsUI {
   const backBtn = seekButton(-5, 'Back 5 seconds', 'seek');
   const forwardBtn = seekButton(5, 'Forward 5 seconds', 'seek');
   const time = el('span', 'time');
+  const timeCurrent = el('span');
+  const timeSeparator = el('span', 'sep');
+  timeSeparator.textContent = ' / ';
+  const timeDuration = el('span');
+  time.append(timeCurrent, timeSeparator, timeDuration);
   const spacer = el('div', 'spacer');
 
   const muteBtn = iconButton('volumeUp', 'Mute (m)');
@@ -158,7 +165,7 @@ export function buildUI(): ControlsUI {
   wrap.append(catcher, osd, line, bar);
 
   return {
-    wrap, osd, catcher, backBtn, forwardBtn, line, linePlayed, bar, progress, buffered, played, thumb, tip, playBtn, time,
+    wrap, osd, catcher, backBtn, forwardBtn, line, linePlayed, bar, progress, buffered, played, thumb, tip, playBtn, time, timeCurrent, timeDuration,
     muteBtn, volume, volumeFill, speedBtn, speedMenu, speedItems, loopBtn, pipBtn, fsBtn,
   };
 }
