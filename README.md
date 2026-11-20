@@ -1,60 +1,52 @@
 # Video Controls for Instagram
 
-A Chromium extension (Chrome, Edge, Brave, Arc…) that adds a full video control bar to every video on
-instagram.com: Reels, Stories, feed posts and post modals.
+A Chromium extension (Chrome, Edge, Brave, Arc…) that gives every video on instagram.com real video
+controls, and downloads videos and images in the best quality Instagram has.
 
-- Progress bar with buffered range, hover time preview, and click or drag to seek
-- Play/pause, current/total time
+## Features
+
+**Controls on every video**: Reels, feed posts, post modals and Stories
+
+- Progress bar with buffered range and hover time preview; click or drag to seek
+- Play/pause, current and total time, frame stepping
 - Playback speed 0.25×–3×, remembered across all videos
-- Mute and volume slider (scroll over the volume to adjust)
+- Mute and volume (scroll over the speaker to adjust), kept in sync with Instagram's own audio button
+- Picture-in-picture and fullscreen; in fullscreen, clicking the video plays and pauses it
 - One end-of-video button. On reels pages it cycles **loop → play next reel → stop**, and the choice is
-  remembered. On other pages it toggles loop / stop for that video. Stop also overrides Instagram's
-  own looping.
-- Downloads. The video download button opens a menu:
-  - **Video with audio**: the single MP4 Instagram offers (often 720p).
-  - **Best quality, merged**: the top video stream (often 1080p) and the audio, combined into one MP4
-    in the browser. No re-encoding, so it's quick once both are downloaded.
-  - **Best quality, separate files**: the same two streams as separate files.
-  - **Current frame**: a PNG of the frame on screen.
+  remembered. Elsewhere it toggles loop / stop for that video.
+- The bar auto-hides after 2 seconds, optionally leaving a thin progress line
+- Grid previews (Explore, profiles) are left alone
 
-  Best-quality streams are often VP9, so those files may only open in a web browser; the menu says so
-  when that's the case.
-  Post and story images get a download button on hover that saves the largest stored size.
-  Carousels download the slide you're looking at.
-- Frame stepping and picture-in-picture
-- Fullscreen, where clicking anywhere plays and pauses instead of opening the post
-- Stories: the controls are a small pill on the story's right edge (a short progress bar and
-  play/pause) that expands into the full set of controls on hover (hovering mute slides out a volume
-  slider), so Instagram's header and reply
-  box stay clear. ←/→ keep switching stories, and −5s / +5s buttons in the pill handle seeking
-- Keyboard shortcuts
-- The bar auto-hides after 2s of inactivity, with an optional thin progress line left visible
+**Stories**: the controls are a small pill on the story's right edge (a short progress bar and play/pause)
+that expands on hover, so Instagram's header and reply box stay clear. ←/→ keep switching stories; the
+pill has −5s / +5s buttons for seeking.
 
-## Install
+**Downloads**: the video download button opens a menu:
 
-```sh
-npm install
-npm run build
-```
+- **Video with audio**: the single MP4 Instagram offers (often 720p)
+- **Best quality, merged**: the top video stream (often 1080p) plus audio, combined into one MP4 in the
+  browser. No re-encoding, so it's quick once both are downloaded
+- **Best quality, separate files**: the same two streams as two files
+- **Current frame**: a PNG of the frame on screen
 
-Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the `dist/` folder.
-
-For development, `npm run dev` starts Vite with hot reload. Load `dist/` the same way once.
+Best-quality streams are often VP9, so those files may only open in a web browser; the menu says so when
+that's the case. Post and story images get a download button on hover that saves the largest stored
+size. Carousels download the slide on screen.
 
 ## Keyboard shortcuts
 
-Shortcuts act on the video under the mouse, or else the most visible one. They're ignored while typing.
+Shortcuts act on the video under the mouse, or else the most visible one, and are ignored while typing.
 
 | Key | Action |
 | --- | --- |
 | <kbd>Space</kbd> / <kbd>K</kbd> | Play / pause |
-| <kbd>←</kbd> / <kbd>→</kbd> | Seek back / forward (step set in popup, default 5s). On stories they keep Instagram's previous/next story |
+| <kbd>←</kbd> / <kbd>→</kbd> | Seek back / forward (step set in the popup, default 5s). On stories they switch stories as usual |
 | <kbd>J</kbd> / <kbd>L</kbd> | Seek ±10s |
 | <kbd>0</kbd>–<kbd>9</kbd> | Jump to 0–90% |
 | <kbd>&lt;</kbd> / <kbd>&gt;</kbd> | Slower / faster |
 | <kbd>,</kbd> / <kbd>.</kbd> | Previous / next frame (pauses) |
 | <kbd>M</kbd> | Mute |
-| <kbd>↑</kbd> / <kbd>↓</kbd> | Volume (only while hovering a video) |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Volume (while hovering a video) |
 | <kbd>F</kbd> | Fullscreen |
 | <kbd>P</kbd> | Picture-in-picture |
 | <kbd>R</kbd> | At end: loop → play next reel → stop (loop ↔ stop outside reels pages) |
@@ -63,45 +55,67 @@ Shortcuts act on the video under the mouse, or else the most visible one. They'r
 
 ## Settings
 
-Click the toolbar icon to toggle the extension, pick the default speed and seek step, and turn shortcuts or
-the idle progress line on or off. Changes apply immediately in open tabs.
+The toolbar popup turns the extension on or off and sets the playback speed, arrow-key seek step, what
+happens when a reel ends, keyboard shortcuts and the idle progress line. Changes apply immediately in open
+tabs.
 
-## How it works
+## Privacy
+
+The extension collects nothing and talks to no server of its own. It only runs on instagram.com, where it
+reads media data from Instagram's own web API with your existing session, and saves files you ask for to
+your downloads folder. Settings are stored with `chrome.storage.sync`. See [PRIVACY.md](PRIVACY.md).
+
+## Development
+
+```sh
+npm install
+npm run dev      # Vite with hot reload; load dist/ once as below
+npm run build    # type-check and build into dist/
+npm run package  # build and zip dist/ for the Chrome Web Store
+```
+
+Load the extension at `chrome://extensions` (or `brave://extensions`): enable **Developer mode**, click
+**Load unpacked**, and select `dist/`. After rebuilding, click the reload arrow on the extension's card.
+
+`npm run icons` regenerates the PNG icons in `public/icons/`.
+
+### How it works
 
 - `src/content/index.ts` finds `<video>` elements with a `MutationObserver` (Instagram is a single-page
   app), creates one `VideoController` per video, and runs one `requestAnimationFrame` loop for on-screen
   videos only.
-- `src/content/controller.ts` renders the bar in a closed Shadow DOM overlay attached to `<body>`. The overlay
-  is positioned over the video's on-screen rect, so Instagram's own overlays and stacking contexts can't
-  cover it. Clicks on the bar are stopped before they reach Instagram, so they don't pause the video or
-  advance a story. Wheel events are passed on to Instagram's scroll container.
-- The bar hides when something unrelated covers the video, such as a modal or a fixed nav bar.
-- Muting from our bar clicks Instagram's own audio button when it can find one, so Instagram's icon and its
-  remembered mute state stay in sync. If Instagram changes the mute state without a click from you (e.g. on
-  play or pause), the extension restores your choice.
-- Instagram resets `playbackRate` when it swaps sources, so the remembered speed is re-applied on
-  `loadstart`, `loadedmetadata`, `play` and `ratechange`.
-- Settings live in `chrome.storage.sync` (`src/shared/settings.ts`).
-- Downloads (`src/content/media.ts`): the page only has streamed video (blob: URLs) and images sized
-  for your screen. The extension asks Instagram's media API, which instagram.com itself uses, for the
-  post's stored versions and picks the largest: progressive MP4s with audio for videos, the original
-  upload size for images. Without a session it falls back to the data embedded in the page, and for
-  images to the largest `srcset` entry. Files are saved by the background worker with
-  `chrome.downloads`, because Instagram's CDN is cross-origin.
-- Merging (`src/content/mux.ts`): Instagram's DASH streams are fragmented MP4s. The merge builds one
-  `moov` with both tracks and copies the `moof`/`mdat` fragments unchanged, interleaved by time.
+- `src/content/controller.ts` renders the controls in a closed Shadow DOM overlay attached to `<body>` and
+  positioned over the video, so Instagram's stacking contexts can't cover it. Clicks on it never reach
+  Instagram (no accidental pauses, story skips or navigation); wheel events are passed on to Instagram's
+  scroll container. The overlay hides when a dialog or fixed layer covers the video.
+- Instagram fights some settings: it resets `playbackRate` when it swaps sources, re-applies its mute
+  state on play/pause, and loops reels in JS. The controller re-applies the user's choices.
+- `src/content/page.ts` knows Instagram's page types, and spots grid tiles (another post beside it on the
+  same row).
+- `src/content/media.ts` finds the original files. The page only has streamed video (blob: URLs) and
+  screen-sized images, so it asks Instagram's media API for the post's stored versions. Stories opened
+  directly don't have the item id in the URL; their reel is read from the page's embedded data or the
+  `reels_media` API and the item on screen is matched by id, image file or video length.
+- `src/content/mux.ts` merges the DASH video and audio streams (fragmented MP4s) by building one `moov`
+  with both tracks and copying the `moof`/`mdat` fragments unchanged, interleaved by time.
+- `src/background.ts` saves CDN files with `chrome.downloads`, because the CDN is cross-origin. Files made
+  in the page (merged video, frames) are saved with a same-origin blob link.
 
-## Debugging
+### Debugging
 
-If the bar doesn't appear somewhere, or mute or auto-next misbehave, run this in the DevTools console on
-instagram.com and reload:
+Run this in the DevTools console on instagram.com, then reload:
 
 ```js
 localStorage.setItem('ivc-debug', '1')
 ```
 
-The console then logs `[ivc]` messages: why a bar is hidden and which element covers it, which Instagram
-button was clicked, and when Instagram's mute changes are reverted. Use `localStorage.removeItem('ivc-debug')`
-to turn it off.
+The console then logs `[ivc]` lines: why controls are hidden and what covers them, which Instagram buttons
+were clicked, mute changes that were reverted, and each step of a media lookup. Turn it off with
+`localStorage.removeItem('ivc-debug')`.
 
-`npm run icons` regenerates the PNG icons in `public/icons/`.
+## Releasing
+
+1. Bump `version` in `package.json` (the manifest takes it from there).
+2. `npm run package` and upload the zip from the project root to the Chrome Web Store dashboard.
+3. Permissions to justify in the listing: `storage` (settings), `downloads` (saving media), and access to
+   `www.instagram.com` (the controls and downloads).

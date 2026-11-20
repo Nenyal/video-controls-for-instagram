@@ -22,7 +22,7 @@ const ICONS = {
   fullscreenExit: 'M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z',
 } as const;
 
-export type IconName = keyof typeof ICONS;
+type IconName = keyof typeof ICONS;
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -36,7 +36,7 @@ export function setIcon(button: HTMLButtonElement, name: IconName): void {
   button.querySelector('path')?.setAttribute('d', ICONS[name]);
 }
 
-/** Circular-arrow button with the seek amount inside, like YouTube's ±10s buttons. */
+/** Circular-arrow button with the seek amount inside. */
 function seekButton(seconds: number, label: string, className: string): HTMLButtonElement {
   const button = iconButton('replay', label, className);
   const svg = button.querySelector('svg')!;

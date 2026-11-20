@@ -32,7 +32,7 @@ export interface MediaItem {
   carousel_media?: MediaItem[];
 }
 
-export interface MediaRef {
+interface MediaRef {
   pk?: string;
   code?: string;
   /** The story or highlight being viewed. Its URL often lacks the item id, so the item is picked out of the whole reel. */
@@ -40,7 +40,7 @@ export interface MediaRef {
 }
 
 /** What's on screen, to pick the right item out of a story reel when there's no id. */
-export interface MediaHint {
+interface MediaHint {
   duration?: number;
   src?: string;
 }
@@ -53,7 +53,7 @@ export interface Download {
 }
 
 /** One stream from the DASH manifest. */
-export interface DashStream {
+interface DashStream {
   url: string;
   width: number;
   height: number;
@@ -69,7 +69,7 @@ export interface DashPair {
 }
 
 /** Instagram shortcodes are the media id in base64 (with its own alphabet). */
-export function shortcodeToPk(code: string): string {
+function shortcodeToPk(code: string): string {
   let pk = 0n;
   for (const ch of code.slice(0, 11)) pk = pk * 64n + BigInt(SHORTCODE_ALPHABET.indexOf(ch));
   return pk.toString();

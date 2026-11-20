@@ -1,7 +1,7 @@
 import css from './styles.css?inline';
 import { iconButton, setDownloadState } from './ui';
 import { bestImage, findMediaRef, largestFromSrcset, resolveMedia, startDownload } from './media';
-import { isGridTile, isStoriesPage } from './controller';
+import { isGridTile, isStoriesPage } from './page';
 
 const HOST_TAG = 'ivc-image-download';
 const MIN_SIZE = 150;

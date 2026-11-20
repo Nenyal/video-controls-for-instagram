@@ -6,6 +6,7 @@ export default defineManifest({
   name: 'Video Controls for Instagram',
   description: pkg.description,
   version: pkg.version,
+  minimum_chrome_version: '105',
   icons: {
     16: 'icons/icon16.png',
     32: 'icons/icon32.png',

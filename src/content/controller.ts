@@ -1,10 +1,11 @@
 import css from './styles.css?inline';
 import { buildUI, setDownloadState, setIcon, type ControlsUI } from './ui';
 import {
-  bestDash, bestVideo, fetchBytes, findMediaRef, resolveMedia, saveBlob, startDownload, type MediaItem,
+  bestDash, bestVideo, fetchBytes, findMediaRef, resolveMedia, saveBlob, startDownload, type DashPair, type MediaItem,
 } from './media';
 import { mergeTracks } from './mux';
 import { debug } from './debug';
+import { isGridTile, isReelsPage, isStoriesPage } from './page';
 import { formatSpeed, formatTime } from '../shared/format';
 import { SPEEDS, type ReelsEnd, type Settings } from '../shared/settings';
 
@@ -51,16 +52,6 @@ window.addEventListener('click', (e) => {
   pageClick.time = performance.now();
   pageClick.target = target;
 }, { capture: true, passive: true });
-
-export function isReelsPage(): boolean {
-  return /^\/reels?\//.test(location.pathname);
-}
-
-export function isStoriesPage(): boolean {
-  return /^\/stories\//.test(location.pathname);
-}
-
-const POST_LINK = 'a[href*="/p/"], a[href*="/reel/"], a[href*="/reels/"]';
 
 const END_LABELS: Record<ReelsEnd, string> = { loop: 'Loop', next: 'Play next reel', stop: 'Stop at end' };
 
@@ -218,7 +209,7 @@ export class VideoController {
 
     const menuOpen = this.ui.speedMenu.classList.contains('open') || this.ui.downloadMenu.classList.contains('open');
     this.ui.wrap.classList.toggle('expanded', side && (this.barHovered || this.scrubbing || this.draggingVolume || menuOpen));
-    // Beside a story the panel covers nothing, so it never needs to hide.
+    // The stories pill is small and out of the way, so it stays visible (collapsed) instead of fading.
     const active =
       side || this.scrubbing || this.draggingVolume || this.barHovered || menuOpen ||
       this.video.paused || now - this.lastActivity < HIDE_DELAY;
@@ -346,10 +337,9 @@ export class VideoController {
     if (button.classList.contains('busy')) return;
     setDownloadState(button, 'busy');
     this.flash('Preparing download…');
-    const ref = findMediaRef(this.video);
     const item = await this.media();
     const file = item && bestVideo(item, this.video.duration);
-    debug('download', { ref, file });
+    debug('download', file);
     const ok = !!file && (await startDownload(file));
     setDownloadState(button, ok ? 'done' : 'failed');
     this.flash(ok ? 'Downloading' : 'Download unavailable');
@@ -559,7 +549,7 @@ export class VideoController {
   private bindScrubbing(): void {
     const { progress, tip } = this.ui;
     const opts = { signal: this.ac.signal };
-    // The progress bar runs top-to-bottom in the stories side panel.
+    // The progress bar runs top-to-bottom in the stories pill.
     const vertical = () => this.ui.wrap.classList.contains('side');
     const fractionAt = (e: PointerEvent) => {
       const r = progress.getBoundingClientRect();
@@ -848,7 +838,7 @@ export class VideoController {
   }
 
   /** Downloads the best video and audio streams and merges them into one MP4 here. */
-  private async downloadMerged(dash: NonNullable<ReturnType<typeof bestDash>>, quality: string, setNote: (text: string) => void): Promise<boolean> {
+  private async downloadMerged(dash: DashPair, quality: string, setNote: (text: string) => void): Promise<boolean> {
     const received = { video: 0, audio: 0 };
     const totals = { video: 0, audio: 0 };
     const report = () => {
@@ -975,7 +965,7 @@ export class VideoController {
     }
     const bufferedFraction = Number.isFinite(d) && d > 0 ? Math.min(bufferedEnd / d, 1) : 0;
 
-    // The stylesheet maps these onto the horizontal bar, the idle line, or the vertical side panel.
+    // The stylesheet maps these onto the horizontal bar, the idle line, or the stories pill's vertical bar.
     ui.wrap.style.setProperty('--played', String(fraction));
     ui.wrap.style.setProperty('--buffered', String(bufferedFraction));
     ui.progress.setAttribute('aria-valuenow', String(Math.round(fraction * 100)));
@@ -1028,24 +1018,6 @@ export class VideoController {
     button.title = `At end: ${END_LABELS[mode].toLowerCase()} (r)`;
     button.setAttribute('aria-label', button.title);
   }
-}
-
-/**
- * True for a video or image inside a grid tile: walking up from it, the first container holding
- * several posts has another post beside it on the same row. Feeds stack posts vertically instead.
- */
-export function isGridTile(media: Element, v: DOMRect): boolean {
-  for (let el = media.parentElement, depth = 0; el && el !== document.body && depth < 10; el = el.parentElement, depth++) {
-    const links = [...el.querySelectorAll(POST_LINK)];
-    if (new Set(links.map((a) => a.getAttribute('href'))).size < 2) continue;
-    return links.some((a) => {
-      if (a.contains(media)) return false;
-      const b = a.getBoundingClientRect();
-      const sameRow = b.width > 0 && Math.abs(b.top - v.top) < v.height / 2;
-      return sameRow && (b.right <= v.left + 2 || b.left >= v.right - 2);
-    });
-  }
-  return false;
 }
 
 /** aria-labels, titles and SVG <title> text of an element and its descendants. */

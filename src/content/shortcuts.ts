@@ -1,4 +1,5 @@
-import { isStoriesPage, type VideoController } from './controller';
+import type { VideoController } from './controller';
+import { isStoriesPage } from './page';
 import type { Settings } from '../shared/settings';
 
 export interface ActiveVideo {
@@ -32,7 +33,7 @@ export function installShortcuts(
         break;
       case 'ArrowLeft':
       case 'ArrowRight':
-        // On stories the arrows keep switching stories; the bar has ±5s buttons instead.
+        // On stories the arrows keep switching stories; the pill has ±5s buttons instead.
         if (isStoriesPage()) return;
         c.seekBy(e.key === 'ArrowLeft' ? -step : step);
         break;

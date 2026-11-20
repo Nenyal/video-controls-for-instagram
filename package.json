@@ -2,13 +2,14 @@
   "name": "instagram-video-controls",
   "private": true,
   "version": "1.0.0",
-  "description": "Adds a full video control bar to Instagram reels, stories and feed videos.",
+  "description": "Real video controls for Instagram: seek, speed, volume, fullscreen and PiP, plus best-quality video and image downloads.",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "package": "npm run build && rm -f instagram-video-controls-*.zip && cd dist && zip -qr ../instagram-video-controls-$npm_package_version.zip ."
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^3.0.0",
