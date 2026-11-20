@@ -12,9 +12,9 @@ instagram.com: Reels, Stories, feed posts and post modals.
   own looping.
 - Frame stepping and picture-in-picture
 - Fullscreen, where clicking anywhere plays and pauses instead of opening the post
-- Stories: the controls are a slim vertical panel to the right of the story, with a top-to-bottom
-  progress bar, so nothing on the story is covered. ←/→ keep switching stories, and −5s / +5s buttons
-  in the panel handle seeking
+- Stories: the controls are a small pill on the story's right edge (a short progress bar and
+  play/pause) that expands into the full set of controls on hover, so Instagram's header and reply
+  box stay clear. ←/→ keep switching stories, and −5s / +5s buttons in the pill handle seeking
 - Keyboard shortcuts
 - The bar auto-hides after 2s of inactivity, with an optional thin progress line left visible
 

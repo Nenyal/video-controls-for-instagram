@@ -110,16 +110,37 @@
   text-shadow: 0 1px 2px rgb(0 0 0 / 0.5);
 }
 
-/* ---------- stories: vertical panel beside the story ---------- */
+/* ---------- stories: small pill on the story's right edge, expanding on hover ---------- */
+
+.wrap.side {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
 
 .wrap.side .bar {
-  inset: 0;
+  position: relative;
+  inset: auto;
+  width: 32px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 12px 0 8px;
+  padding: 10px 0 2px;
+  border-radius: 16px;
+  background: rgb(0 0 0 / 0.4);
+  transition: width 0.15s ease, background 0.15s ease;
+}
+
+.wrap.side.expanded .bar {
+  width: 44px;
+  padding: 12px 0 6px;
   border-radius: 22px;
-  background: rgb(255 255 255 / 0.08);
+  background: rgb(0 0 0 / 0.65);
+}
+
+/* Collapsed: just the short progress bar and play/pause. */
+.wrap.side:not(.expanded) .row > :not(:first-child) {
+  display: none;
 }
 
 .wrap.side .row {
@@ -141,15 +162,21 @@
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 6px 0;
+  padding: 5px 0;
   font-size: 10px;
 }
 
 .wrap.side .progress {
-  flex: 1;
+  flex: none;
   width: 16px;
-  height: auto;
-  margin: 0 0 8px;
+  height: 36px;
+  margin: 0 0 4px;
+  transition: height 0.15s ease;
+}
+
+.wrap.side.expanded .progress {
+  height: var(--side-progress, 110px);
+  margin-bottom: 8px;
 }
 
 .wrap.side .track {
@@ -193,7 +220,7 @@
   transform: translateY(-50%);
 }
 
-/* Open over the story rather than off-screen to the right. */
+/* Open towards the story's centre. */
 .wrap.side .menu {
   right: calc(100% + 6px);
   bottom: 0;

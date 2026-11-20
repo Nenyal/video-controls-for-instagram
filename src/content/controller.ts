@@ -15,9 +15,13 @@ const MIN_WIDTH = 140;
 const MIN_HEIGHT = 100;
 const OCCLUSION_INTERVAL = 250;
 const BAR_HEIGHT = 74;
-/** Width of the vertical panel shown beside a story, and its gap to whatever it sits next to. */
+/** Stories pill: width, gap to the story's right edge, and room kept free above and below it. */
 const SIDE_WIDTH = 44;
-const SIDE_GAP = 10;
+const SIDE_INSET = 8;
+const SIDE_MARGIN_Y = 80;
+const SIDE_MAX_HEIGHT = 520;
+/** Height of everything in the expanded pill except its progress bar. */
+const SIDE_CONTROLS_HEIGHT = 340;
 /** How long after a click on Instagram's UI a mute change still counts as the user's doing. */
 const USER_CLICK_WINDOW = 600;
 /** Auto-next triggers this close to the end, before Instagram gets a chance to loop. */
@@ -79,11 +83,6 @@ export class VideoController {
   private occluded = false;
   /** Hover-preview tile in a grid (explore, profile): no controls. Null until it can be measured. */
   private gridTile: boolean | null;
-  /** Stories: the card holding the story, with the panel this far right of the card's edge. */
-  private storyCard: HTMLElement | null = null;
-  private sideOffset: number | null = null;
-  /** Fallback when there's no story card: space kept free for Instagram's own controls over the video. */
-  private bottomInset = 0;
 
   private lastActivity = 0;
   private barHovered = false;
@@ -175,14 +174,13 @@ export class VideoController {
     const r = isFs ? new DOMRect(0, 0, window.innerWidth, window.innerHeight) : this.video.getBoundingClientRect();
     if (!isFs && now - this.lastOcclusionCheck > OCCLUSION_INTERVAL) {
       this.lastOcclusionCheck = now;
-      this.updateSidePanel(r);
-      this.bottomInset = this.sideOffset !== null ? 0 : this.computeBottomInset(r);
-      this.occluded = this.checkOccluded(r, Math.min(r.bottom - this.bottomInset, window.innerHeight));
+      this.occluded = this.checkOccluded(r, Math.min(r.bottom, window.innerHeight));
     }
-    const side = !isFs && this.storyCard !== null && this.sideOffset !== null;
+    // Stories: a small pill on the story's right edge instead of a bar over Instagram's reply box.
+    const side = !isFs && isStoriesPage();
     // Clamp to the viewport so the bar sits at the visible bottom of tall or partly scrolled videos.
     const top = Math.max(r.top, 0);
-    const bottom = Math.min(r.bottom - (isFs ? 0 : this.bottomInset), window.innerHeight);
+    const bottom = Math.min(r.bottom, window.innerHeight);
     const visibleHeight = bottom - top;
 
     if (r.width < MIN_WIDTH || r.height < MIN_HEIGHT || visibleHeight < Math.min(MIN_HEIGHT, r.height)) {
@@ -203,12 +201,16 @@ export class VideoController {
     this.rect = r;
     const s = this.host.style;
     if (side) {
-      const card = this.storyCard!.getBoundingClientRect();
-      s.left = `${card.right + this.sideOffset!}px`;
-      s.top = `${card.top}px`;
+      // The host reserves room for the expanded pill; the pill itself is centred in it and only it
+      // takes pointer events, so the unused space doesn't block the story.
+      const height = Math.min(r.height - 2 * SIDE_MARGIN_Y, SIDE_MAX_HEIGHT);
+      s.left = `${r.right - SIDE_WIDTH - SIDE_INSET}px`;
+      s.top = `${r.top + (r.height - height) / 2}px`;
       s.width = `${SIDE_WIDTH}px`;
-      s.height = `${card.height}px`;
-      this.ui.speedMenu.style.setProperty('--menu-max', `${Math.max(120, card.height * 0.8)}px`);
+      s.height = `${height}px`;
+      const progress = Math.min(Math.max(height - SIDE_CONTROLS_HEIGHT, 40), 110);
+      this.ui.wrap.style.setProperty('--side-progress', `${progress}px`);
+      this.ui.speedMenu.style.setProperty('--menu-max', `${Math.max(120, r.height * 0.7)}px`);
     } else {
       s.left = `${r.left}px`;
       s.top = `${top}px`;
@@ -219,6 +221,7 @@ export class VideoController {
     this.ui.wrap.classList.toggle('side', side);
 
     const menuOpen = this.ui.speedMenu.classList.contains('open');
+    this.ui.wrap.classList.toggle('expanded', side && (this.barHovered || this.scrubbing || this.draggingVolume || menuOpen));
     // Beside a story the panel covers nothing, so it never needs to hide.
     const active =
       side || this.scrubbing || this.draggingVolume || this.barHovered || menuOpen ||
@@ -391,54 +394,6 @@ export class VideoController {
       return mode === 'next' && this.isFullscreen ? 'loop' : mode;
     }
     return this.loopOverride === null ? null : this.loopOverride ? 'loop' : 'stop';
-  }
-
-  /**
-   * Stories: finds the story card and a free spot for the vertical panel to its right, stepping past
-   * Instagram's own small controls there (e.g. the next-story arrow). sideOffset stays null when there's
-   * no card or no room, and the bar falls back to sitting over the story.
-   */
-  private updateSidePanel(r: DOMRect): void {
-    this.sideOffset = null;
-    if (!isStoriesPage()) {
-      this.storyCard = null;
-      return;
-    }
-    if (!this.storyCard?.isConnected) this.storyCard = findStoryCard(this.video, r);
-    if (!this.storyCard) return;
-    const card = this.storyCard.getBoundingClientRect();
-    const obstacles: DOMRect[] = [];
-    for (const el of document.querySelectorAll('button, [role="button"], a[href]')) {
-      const b = el.getBoundingClientRect();
-      const small = b.width > 0 && b.height > 0 && b.width <= 120;
-      if (small && b.bottom > card.top && b.top < card.bottom && b.left >= card.right - 1) obstacles.push(b);
-    }
-    let x = card.right + SIDE_GAP;
-    for (let pass = 0; pass < 5; pass++) {
-      const hit = obstacles.find((b) => b.left < x + SIDE_WIDTH && b.right > x);
-      if (!hit) break;
-      x = hit.right + SIDE_GAP;
-    }
-    if (x + SIDE_WIDTH <= window.innerWidth) this.sideOffset = x - card.right;
-  }
-
-  /**
-   * On stories, Instagram's reply box and like/share buttons sit over the bottom of the video.
-   * Returns how far the bar must move up to stay clear of them.
-   */
-  private computeBottomInset(r: DOMRect): number {
-    if (!isStoriesPage()) return 0;
-    const lowerArea = r.top + r.height * 0.6;
-    const maxArea = (r.width * r.height) / 6; // skips Instagram's large tap-to-navigate zones
-    let highest = Infinity;
-    const controls = 'textarea, input, [contenteditable="true"], button, [role="button"], a[href]';
-    for (const el of document.querySelectorAll(controls)) {
-      const b = el.getBoundingClientRect();
-      if (b.width === 0 || b.height === 0 || b.width * b.height > maxArea) continue;
-      if (b.top < lowerArea || b.top >= r.bottom || b.right <= r.left || b.left >= r.right) continue;
-      highest = Math.min(highest, b.top);
-    }
-    return highest === Infinity ? 0 : r.bottom - highest + 4;
   }
 
   private setShown(value: boolean, reason: string): void {
@@ -906,17 +861,6 @@ export class VideoController {
     button.title = `At end: ${END_LABELS[mode].toLowerCase()} (r)`;
     button.setAttribute('aria-label', button.title);
   }
-}
-
-/** The story card: the outermost ancestor that is still about the video's size (with header and reply box). */
-function findStoryCard(video: HTMLVideoElement, r: DOMRect): HTMLElement | null {
-  let card: HTMLElement | null = null;
-  for (let el = video.parentElement, depth = 0; el && el !== document.body && depth < 12; el = el.parentElement, depth++) {
-    const b = el.getBoundingClientRect();
-    if (Math.abs(b.width - r.width) > r.width * 0.15 || Math.abs(b.height - r.height) > r.height * 0.15) break;
-    card = el;
-  }
-  return card;
 }
 
 /**
